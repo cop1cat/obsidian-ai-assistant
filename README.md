@@ -26,7 +26,7 @@ Local AI chat with tool calling for your Obsidian vault. Connects to any OpenAI-
 
 ### Option A — manual install from GitHub Releases (recommended)
 
-1. Go to [Releases](https://github.com/yai-projects/obsidian-ai-assistant/releases) and download the latest release assets:
+1. Go to [Releases](https://github.com/cop1cat/obsidian-ai-assistant/releases) and download the latest release assets:
    - `main.js`
    - `manifest.json`
    - `styles.css`
@@ -38,7 +38,7 @@ Local AI chat with tool calling for your Obsidian vault. Connects to any OpenAI-
 Requires Node 18+ and [pnpm](https://pnpm.io/).
 
 ```bash
-git clone https://github.com/yai-projects/obsidian-ai-assistant.git
+git clone https://github.com/cop1cat/obsidian-ai-assistant.git
 cd obsidian-ai-assistant
 pnpm install
 pnpm run build
@@ -61,7 +61,7 @@ Then in Obsidian: **Settings → Community plugins → Reload plugins**, and ena
 If you use the [BRAT](https://github.com/TfTHacker/obsidian42-brat) plugin (Beta Reviewers Auto-update Tool):
 
 1. Open BRAT settings → **Add Beta plugin**
-2. Paste: `yai-projects/obsidian-ai-assistant`
+2. Paste: `cop1cat/obsidian-ai-assistant`
 3. Enable the plugin in **Settings → Community plugins**
 
 BRAT will keep it up to date automatically as new releases are published.

@@ -27,7 +27,7 @@
 
 ### Вариант A — вручную из GitHub Releases (рекомендуется)
 
-1. Откройте [Releases](https://github.com/yai-projects/obsidian-ai-assistant/releases) и скачайте из последнего релиза:
+1. Откройте [Releases](https://github.com/cop1cat/obsidian-ai-assistant/releases) и скачайте из последнего релиза:
    - `main.js`
    - `manifest.json`
    - `styles.css`
@@ -39,7 +39,7 @@
 Нужен Node 18+ и [pnpm](https://pnpm.io/).
 
 ```bash
-git clone https://github.com/yai-projects/obsidian-ai-assistant.git
+git clone https://github.com/cop1cat/obsidian-ai-assistant.git
 cd obsidian-ai-assistant
 pnpm install
 pnpm run build
@@ -62,7 +62,7 @@ ln -sf "$(pwd)/styles.css"    /path/to/vault/.obsidian/plugins/obsidian-ai-assis
 Если у вас стоит плагин [BRAT](https://github.com/TfTHacker/obsidian42-brat):
 
 1. BRAT settings → **Add Beta plugin**
-2. Вставьте: `yai-projects/obsidian-ai-assistant`
+2. Вставьте: `cop1cat/obsidian-ai-assistant`
 3. Включите плагин в **Settings → Community plugins**
 
 BRAT будет сам обновлять плагин при выходе новых релизов.

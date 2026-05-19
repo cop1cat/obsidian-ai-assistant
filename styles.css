@@ -68,6 +68,25 @@
 
 .ai-chat-header-back .svg-icon { width: 16px; height: 16px; }
 
+.ai-chat-header-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 5px;
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+}
+.ai-chat-header-new:hover {
+  background: var(--interactive-accent-hover);
+  color: var(--text-on-accent);
+}
+.ai-chat-header-new-icon { display: inline-flex; }
+.ai-chat-header-new-icon .svg-icon { width: 14px; height: 14px; }
+.ai-chat-header-new-label { line-height: 1; }
+
 /* === Body wrapper === */
 .ai-chat-body {
   flex: 1;
@@ -268,6 +287,13 @@
 }
 .ai-composer-send:disabled { background: var(--background-modifier-border); color: var(--text-faint); }
 
+.ai-chat-messages-wrap {
+  flex: 1;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
 .ai-chat-messages {
   flex: 1;
   overflow-y: auto;
@@ -276,6 +302,34 @@
   gap: 12px;
   padding: 12px;
 }
+
+.ai-scroll-bottom-btn {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  opacity: 0.95;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  z-index: 2;
+}
+.ai-scroll-bottom-btn:hover {
+  background: var(--background-modifier-hover);
+  transform: translateY(-1px);
+}
+.ai-scroll-bottom-btn.is-hidden {
+  display: none;
+}
+.ai-scroll-bottom-btn .svg-icon { width: 16px; height: 16px; }
 
 .ai-chat-msg {
   border-radius: 6px;
@@ -618,3 +672,24 @@
 }
 .ai-json-status.is-ok { color: var(--text-success, var(--color-green)); }
 .ai-json-status.is-error { color: var(--text-error); }
+
+/* === System prompt update banner === */
+.ai-prompt-update-banner {
+  margin: 8px 0 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--interactive-accent);
+  border-radius: 6px;
+  background: var(--background-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ai-prompt-update-text {
+  font-size: 12px;
+  color: var(--text-normal);
+  line-height: 1.4;
+}
+.ai-prompt-update-buttons {
+  display: flex;
+  gap: 6px;
+}

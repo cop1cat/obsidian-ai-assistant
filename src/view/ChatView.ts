@@ -52,6 +52,12 @@ export class ChatView extends ItemView {
   private bodyEl!: HTMLElement;
   private sessionsListEl: HTMLElement | null = null;
   private messagesEl: HTMLElement | null = null;
+  private scrollBottomBtn: HTMLButtonElement | null = null;
+  /** True when the messages container is scrolled (≈) to the bottom and we
+   *  should keep it pinned as new content streams in. Flipped to false the
+   *  moment the user scrolls up. */
+  private stickToBottom = true;
+  private readonly STICK_THRESHOLD_PX = 32;
   private composerEl: HTMLElement | null = null;
   private contextBarEl: HTMLElement | null = null;
   private inputEl: HTMLTextAreaElement | null = null;
@@ -148,10 +154,12 @@ export class ChatView extends ItemView {
       left.createSpan({ cls: "ai-chat-header-title", text: "Chats" });
       left.createSpan({ cls: "ai-chat-header-count", text: `${this.plugin.sessions.length}` });
 
-      const newBtn = right.createEl("button", { cls: "ai-chat-header-btn" });
+      const newBtn = right.createEl("button", { cls: "ai-chat-header-btn ai-chat-header-new mod-cta" });
       newBtn.setAttr("aria-label", "New chat");
       newBtn.title = "New chat";
-      setIcon(newBtn, "plus");
+      const newIcon = newBtn.createSpan({ cls: "ai-chat-header-new-icon" });
+      setIcon(newIcon, "plus");
+      newBtn.createSpan({ cls: "ai-chat-header-new-label", text: "New chat" });
       newBtn.onclick = () => {
         const empty = this.plugin.sessions.find(
           (s) => s.uiMessages.length === 0 && s.history.length === 0,
@@ -217,18 +225,60 @@ export class ChatView extends ItemView {
     this.sendBtn = null;
     this.stopBtn = null;
     this.emptyHintEl = null;
+    this.scrollBottomBtn = null;
     this.messageElements.clear();
+    this.stickToBottom = true;
 
     if (this.mode === "list") {
       this.sessionsListEl = body.createDiv({ cls: "ai-sessions-list" });
       this.renderSessionsList();
     } else {
-      this.messagesEl = body.createDiv({ cls: "ai-chat-messages" });
+      const messagesWrap = body.createDiv({ cls: "ai-chat-messages-wrap" });
+      const messagesEl = messagesWrap.createDiv({ cls: "ai-chat-messages" });
+      this.messagesEl = messagesEl;
+      messagesEl.addEventListener("scroll", () => this.onMessagesScroll());
+
+      const scrollBtn = messagesWrap.createEl("button", { cls: "ai-scroll-bottom-btn" });
+      scrollBtn.setAttr("aria-label", "Scroll to latest");
+      scrollBtn.title = "Scroll to latest";
+      setIcon(scrollBtn, "arrow-down");
+      scrollBtn.onclick = () => {
+        if (!this.messagesEl) return;
+        this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+        this.stickToBottom = true;
+        this.updateScrollBtn();
+      };
+      scrollBtn.toggleClass("is-hidden", true);
+      this.scrollBottomBtn = scrollBtn;
+
       this.buildComposer(body);
       this.renderActiveSessionMessages();
       this.updateEmptyState();
       this.updateContextBar();
+      // Initial pin to bottom after layout.
+      requestAnimationFrame(() => {
+        if (!this.messagesEl) return;
+        this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+        this.updateScrollBtn();
+      });
     }
+  }
+
+  private onMessagesScroll(): void {
+    const el = this.messagesEl;
+    if (!el) return;
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    this.stickToBottom = distFromBottom <= this.STICK_THRESHOLD_PX;
+    this.updateScrollBtn();
+  }
+
+  private updateScrollBtn(): void {
+    const btn = this.scrollBottomBtn;
+    const el = this.messagesEl;
+    if (!btn || !el) return;
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const hasOverflow = el.scrollHeight > el.clientHeight + 1;
+    btn.toggleClass("is-hidden", !hasOverflow || distFromBottom <= this.STICK_THRESHOLD_PX);
   }
 
   private buildComposer(parent: HTMLElement): void {
@@ -565,12 +615,20 @@ export class ChatView extends ItemView {
     const messagesEl = this.messagesEl;
     if (!messagesEl) return;
     let el = this.messageElements.get(msg.id);
+    const isNew = !el;
     if (!el) {
       el = messagesEl.createDiv();
       this.messageElements.set(msg.id, el);
     }
     this.renderer.render(el, msg);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    // Only pull the view to the bottom if the user is already pinned there.
+    // A new user message always pins (we just sent it) — same for any newly
+    // appended message; mid-stream deltas only scroll if the user hasn't moved.
+    if (this.stickToBottom || isNew) {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      this.stickToBottom = true;
+    }
+    this.updateScrollBtn();
   }
 
   private getUi(id: string): UiMessage | undefined {

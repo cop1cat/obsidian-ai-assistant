@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-05-20
+
+### Added
+- Default system prompt gains a **Style** section: match the user's language, plain neutral tone, no sycophancy ("отличный план", "great idea", etc.), no emoji or decorative symbols, no exclamation marks, no filler openers/closers ("Конечно!", "С чего начнём?", "Hope this helps"), no unprompted menus of next-step options, no announcing intent — answer or act directly. Aim for the tone of an engineer's PR comment.
+- Notice on plugin load + banner in Settings → AI Assistant when the shipped default prompt changes and the user hasn't customised theirs. Detection is hash-based (FNV-1a of the prompt): a `systemPromptBaselineHash` is stored when the user last accepted/saved a prompt, and we only warn when `hash(current) === baseline && baseline !== hash(new default)` — so custom prompts are never flagged. The banner's "Review new default" button opens the editor preloaded with the new default; nothing is saved until the user clicks Save. "Keep current" re-baselines so the warning doesn't reappear. New toggle "Notify when default system prompt changes" lets users disable the nag entirely.
+- Sticky-bottom autoscroll: the messages pane only auto-scrolls when the user is already near the bottom (within 32px). Scrolling up while the assistant streams no longer fights with the user.
+- "Scroll to latest" floating button (circular, bottom-right of the messages area) appears whenever the user is scrolled up; click pins back to the bottom.
+- "New chat" button in the list-mode header is now a labelled accent-coloured button (icon + text), not a bare `+`.
+
 ## [0.3.0] — 2026-05-20
 
 ### Changed

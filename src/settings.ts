@@ -15,8 +15,21 @@ Rules:
 - Before edit_file or write_file with overwrite=true, ALWAYS read_file first to see current content.
 - For edit_file, old_string must match exactly once (including whitespace).
 - When creating new notes, infer the vault's naming convention from existing files (folders, casing, date formats).
-- Use [[wikilinks]] when referring to notes in your responses.
-- Be concise. Show what you did, not what you are about to do.
+
+Style:
+- Match the user's language. If they write in Russian, reply in Russian.
+- Plain, neutral, professional tone. No sycophancy: never say "отличный план", "хороший вопрос", "солидный план", "great idea", "perfect", "love it". Do not praise the user or their notes.
+- Do not use emoji or decorative symbols (🔥 ✅ 😊 ✨ 🎉 ⚡ — none). Use plain markdown bullets and headings.
+- Do not use exclamation marks unless you are quoting the user.
+- No filler openers ("Конечно!", "Sure!", "Of course", "Great question") and no filler closers ("С чего начнём?", "Что-то ещё?", "Дай знать!", "Hope this helps", "Let me know!").
+- Do not offer an unprompted menu of next-step options. If the user asked a question, answer it. If they asked you to do X, do X — do not propose alternative things you could do instead.
+- Do not announce intent ("Сейчас я сделаю…", "I'll start by…"). Just do it, then report the result. Show what you did, not what you are about to do.
+- Default to ≤3 short paragraphs. Go longer only when the task genuinely requires it.
+- When the answer is a single fact or short list, give it directly without preamble or restating the question.
+- When you propose an action, propose it once in one sentence, then stop. Do not render it as a checkbox/bullet menu.
+- If a sentence adds no information, delete it.
+- Use [[wikilinks]] when referring to notes by name. Format file paths in backticks.
+- Aim for the tone of an engineer's PR comment: what you did, what you found, where you stopped. No commentary on the user's mood, intentions, or how nice their vault is.
 
 Safety — do not perform destructive operations without an explicit user request:
 - "Explicit" means the user named the file/folder or unambiguously asked to delete/overwrite/revert. Vague requests ("clean up", "fix this") are NOT explicit consent for destruction.
@@ -26,6 +39,28 @@ Safety — do not perform destructive operations without an explicit user reques
 - Never move/rename or create_folder for files/folders the user did not mention, even if it would "tidy up" the vault.
 - If you are unsure whether an action is destructive or whether the user wants it, ASK first. Prefer a clarifying question over a destructive action.
 - If a destructive action is the natural next step but wasn't requested, propose it in your reply and wait for confirmation before calling the tool.`;
+
+/** Compact, stable, dependency-free hash for strings (FNV-1a 32-bit).
+ *  Used only to compare two prompt strings cheaply — not for security. */
+export function hashPrompt(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+}
+
+export const CURRENT_DEFAULT_PROMPT_HASH = hashPrompt(DEFAULT_SYSTEM_PROMPT);
+
+/** True if the user's prompt is unchanged since the last baseline AND the
+ *  shipped default has moved on — i.e. they are sitting on a stale default. */
+export function isStaleDefaultPrompt(settings: PluginSettings): boolean {
+  if (!settings.notifyOnPromptUpdate) return false;
+  if (!settings.systemPromptBaselineHash) return false;
+  if (hashPrompt(settings.systemPrompt) !== settings.systemPromptBaselineHash) return false;
+  return settings.systemPromptBaselineHash !== CURRENT_DEFAULT_PROMPT_HASH;
+}
 
 export interface PluginSettings {
   baseUrl: string;
@@ -45,6 +80,14 @@ export interface PluginSettings {
   /** Timestamp (ms) of the last memory write. 0 = never written. */
   memoryUpdatedAt: number;
   includeMemoryInContext: boolean;
+  /** FNV-1a hash of the system prompt at the moment the user last accepted /
+   *  saved it. Lets us detect "user hasn't touched the prompt since baseline,
+   *  but the shipped default has moved on" without ever overwriting custom
+   *  prompts. Empty on legacy installs — backfilled on first load. */
+  systemPromptBaselineHash: string;
+  /** Toggle for the one-shot Notice + settings banner shown when the shipped
+   *  default system prompt has changed and the user is on the prior default. */
+  notifyOnPromptUpdate: boolean;
   /** Free-form JSON merged into each chat-completion request body.
    *  Empty string = no extras. Stored as text so users can author it
    *  directly; parsed lazily by the client (invalid JSON = ignored + warn). */
@@ -69,6 +112,8 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   memoryText: "",
   memoryUpdatedAt: 0,
   includeMemoryInContext: true,
+  systemPromptBaselineHash: "",
+  notifyOnPromptUpdate: true,
   extraBody: "",
 };
 
@@ -113,6 +158,8 @@ export function validateSettings(raw: unknown): PluginSettings {
     memoryText: str("memoryText", defaults.memoryText),
     memoryUpdatedAt: num("memoryUpdatedAt", defaults.memoryUpdatedAt),
     includeMemoryInContext: bool("includeMemoryInContext", defaults.includeMemoryInContext),
+    systemPromptBaselineHash: str("systemPromptBaselineHash", defaults.systemPromptBaselineHash),
+    notifyOnPromptUpdate: bool("notifyOnPromptUpdate", defaults.notifyOnPromptUpdate),
     extraBody: str("extraBody", defaults.extraBody),
   };
 }
@@ -126,9 +173,10 @@ class SystemPromptModal extends Modal {
     app: App,
     private plugin: AIAssistantPlugin,
     private onSaved: () => void,
+    initialOverride?: string,
   ) {
     super(app);
-    this.initial = plugin.settings.systemPrompt;
+    this.initial = initialOverride ?? plugin.settings.systemPrompt;
   }
 
   onOpen(): void {
@@ -173,7 +221,11 @@ class SystemPromptModal extends Modal {
 
     const saveBtn = buttons.createEl("button", { text: "Save", cls: "mod-cta" });
     saveBtn.onclick = async () => {
-      this.plugin.settings.systemPrompt = this.textarea.value;
+      const next = this.textarea.value;
+      this.plugin.settings.systemPrompt = next;
+      // Re-baseline so we don't nag about default updates the user has just
+      // accepted (or just personalised).
+      this.plugin.settings.systemPromptBaselineHash = hashPrompt(next);
       await this.plugin.saveSettings();
       this.onSaved();
       this.close();
@@ -284,6 +336,31 @@ export class AIAssistantSettingTab extends PluginSettingTab {
     };
     renderPreview();
 
+    if (isStaleDefaultPrompt(this.plugin.settings)) {
+      const banner = containerEl.createDiv({ cls: "ai-prompt-update-banner" });
+      banner.createDiv({
+        cls: "ai-prompt-update-text",
+        text:
+          "The shipped default system prompt has been updated since you last accepted it. " +
+          "Your current prompt is unchanged from the old default, so you can safely review " +
+          "the new one. Opening the editor will preload the new default — nothing is saved " +
+          "until you click Save.",
+      });
+      const btnRow = banner.createDiv({ cls: "ai-prompt-update-buttons" });
+      const reviewBtn = btnRow.createEl("button", { cls: "mod-cta", text: "Review new default" });
+      reviewBtn.onclick = () => {
+        new SystemPromptModal(this.app, this.plugin, () => this.display(), DEFAULT_SYSTEM_PROMPT).open();
+      };
+      const dismissBtn = btnRow.createEl("button", { text: "Keep current" });
+      dismissBtn.onclick = async () => {
+        // Re-baseline to the user's current prompt: they've seen the update
+        // and chose to stay. Don't nag again until the next default change.
+        this.plugin.settings.systemPromptBaselineHash = hashPrompt(this.plugin.settings.systemPrompt);
+        await this.plugin.saveSettings();
+        banner.remove();
+      };
+    }
+
     new Setting(containerEl)
       .setName("Edit system prompt")
       .setDesc("Opens a full-window editor with copy / reset.")
@@ -312,6 +389,18 @@ export class AIAssistantSettingTab extends PluginSettingTab {
       .addToggle((tg) =>
         tg.setValue(this.plugin.settings.includeActiveNoteInContext).onChange(async (v) => {
           this.plugin.settings.includeActiveNoteInContext = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Notify when default system prompt changes")
+      .setDesc(
+        "When a new plugin version ships a different default, show a one-time notice and a banner here. Off = no nagging.",
+      )
+      .addToggle((tg) =>
+        tg.setValue(this.plugin.settings.notifyOnPromptUpdate).onChange(async (v) => {
+          this.plugin.settings.notifyOnPromptUpdate = v;
           await this.plugin.saveSettings();
         }),
       );

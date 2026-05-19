@@ -1,9 +1,11 @@
-import { Plugin, WorkspaceLeaf } from "obsidian";
+import { Notice, Plugin, WorkspaceLeaf } from "obsidian";
 import { ChatView, VIEW_TYPE_AI_CHAT } from "./view/ChatView";
 import {
   AIAssistantSettingTab,
   DEFAULT_SETTINGS,
   PluginSettings,
+  hashPrompt,
+  isStaleDefaultPrompt,
   validateSettings,
 } from "./settings";
 import type { ChatMessage, UiMessage } from "./llm/types";
@@ -91,6 +93,20 @@ export default class AIAssistantPlugin extends Plugin {
     });
 
     this.addSettingTab(new AIAssistantSettingTab(this.app, this));
+
+    // First-run / legacy backfill: anchor the baseline to the current prompt
+    // so we never warn users about a default they're seeing for the first time.
+    if (!this.settings.systemPromptBaselineHash) {
+      this.settings.systemPromptBaselineHash = hashPrompt(this.settings.systemPrompt);
+      await this.saveSettings();
+    }
+
+    if (isStaleDefaultPrompt(this.settings)) {
+      new Notice(
+        "AI Assistant: the default system prompt has changed. Open Settings → AI Assistant to review.",
+        10_000,
+      );
+    }
   }
 
   onunload(): void {

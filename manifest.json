@@ -1,7 +1,7 @@
 {
   "id": "obsidian-ai-assistant",
   "name": "AI Assistant",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "minAppVersion": "1.4.0",
   "description": "Local AI chat with tool calling for your vault. Works with any OpenAI-compatible endpoint (vLLM, llama.cpp, LM Studio).",
   "author": "cop1cat",

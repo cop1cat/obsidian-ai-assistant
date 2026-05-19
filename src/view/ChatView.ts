@@ -206,7 +206,11 @@ export class ChatView extends ItemView {
       const s = this.session();
       const title = left.createSpan({ cls: "ai-chat-header-title is-chat-title" });
       title.setText(s.title || "Untitled");
-      title.title = s.title || "Untitled";
+      title.title = "Double-click to rename";
+      title.ondblclick = (e) => {
+        e.preventDefault();
+        this.beginInlineRename(title, s);
+      };
 
       const more = right.createEl("button", { cls: "ai-chat-header-btn" });
       more.setAttr("aria-label", "Chat options");
@@ -433,6 +437,12 @@ export class ChatView extends ItemView {
       } else {
         title.setText(s.title || "Untitled");
       }
+      title.title = "Double-click to rename";
+      title.ondblclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.beginInlineRename(title, s);
+      };
 
       const meta = text.createDiv({ cls: "ai-session-meta" });
       const msgs = s.uiMessages.length;
@@ -450,7 +460,8 @@ export class ChatView extends ItemView {
         this.renderHighlighted(snipEl, snippet, q);
       }
 
-      row.onclick = () => {
+      row.onclick = (e) => {
+        if ((e.target as HTMLElement).closest(".ai-session-row-actions")) return;
         if (s.id !== activeId) {
           this.stop();
           this.plugin.switchSession(s.id);
@@ -461,7 +472,61 @@ export class ChatView extends ItemView {
         e.preventDefault();
         this.openSessionMenu(e, s);
       };
+
+      const actions = row.createDiv({ cls: "ai-session-row-actions" });
+      const trashBtn = actions.createEl("button", { cls: "ai-session-action" });
+      trashBtn.setAttr("aria-label", "Delete chat");
+      trashBtn.title = "Delete chat";
+      setIcon(trashBtn, "trash-2");
+      trashBtn.onclick = (e) => {
+        e.stopPropagation();
+        if (!window.confirm(`Delete chat "${s.title || "Untitled"}"? This cannot be undone.`)) return;
+        const wasActive = s.id === this.session().id;
+        if (wasActive) this.stop();
+        this.plugin.deleteSession(s.id);
+      };
     }
+  }
+
+  /** Swap a title element for an <input>, edit-in-place, commit on Enter/blur,
+   *  revert on Escape. Works for both the chat-header title and list rows. */
+  private beginInlineRename(host: HTMLElement, s: ChatSession): void {
+    const original = s.title || "";
+    const input = host.doc.createElement("input");
+    input.type = "text";
+    input.className = "ai-inline-rename-input";
+    input.value = original;
+    host.replaceWith(input);
+    input.focus();
+    input.select();
+
+    let done = false;
+    const commit = (save: boolean) => {
+      if (done) return;
+      done = true;
+      if (save) {
+        const next = input.value.trim();
+        if (next && next !== original) {
+          this.plugin.renameSession(s.id, next);
+          // renameSession fires onSessionsChange → list/header re-renders.
+          return;
+        }
+      }
+      // No-op: re-render to restore the original element cleanly.
+      if (this.mode === "list") this.renderSessionsList();
+      else this.renderHeader();
+    };
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        commit(true);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        commit(false);
+      }
+    });
+    input.addEventListener("blur", () => commit(true));
   }
 
   /** Render `text` into `host`, wrapping case-insensitive matches of `query`

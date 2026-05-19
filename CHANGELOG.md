@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] — 2026-05-20
+
+### Added
+- Trash icon on hover for each session row in the list — one-click delete with a confirm prompt. Stops generation first if the active session is being deleted.
+- Double-click a chat title to rename it in place. Works in both the chat-header title and in any list row. Enter / blur commits, Escape reverts.
+
+### Changed
+- Header icon buttons (✕ back, ⋯ chat menu, ⚙ settings) and composer buttons (Send / Stop) are now consistent 28×28 squares with a 6px radius and 16×16 icons — no more "squished" / asymmetric look. The list-mode-only override is gone; one rule covers both modes.
+
 ## [0.3.2] — 2026-05-20
 
 ### Added

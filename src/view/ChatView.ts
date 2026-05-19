@@ -1,4 +1,4 @@
-import { ItemView, Menu, Notice, TFile, WorkspaceLeaf } from "obsidian";
+import { ItemView, Menu, Notice, TFile, WorkspaceLeaf, setIcon } from "obsidian";
 import type AIAssistantPlugin from "../main";
 import type { ChatSession } from "../main";
 import { Agent } from "../llm/agent";
@@ -9,6 +9,18 @@ export const VIEW_TYPE_AI_CHAT = "ai-assistant-chat";
 
 const MAX_ACTIVE_NOTE_CHARS = 12_000;
 const MAX_INPUT_HISTORY = 50;
+
+function formatRelative(ts: number): string {
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return "just now";
+  const m = Math.floor(diff / 60_000);
+  if (m < 60) return `${m} min${m === 1 ? "" : "s"} ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} hr${h === 1 ? "" : "s"} ago`;
+  const d = Math.floor(h / 24);
+  if (d < 30) return `${d} day${d === 1 ? "" : "s"} ago`;
+  return new Date(ts).toLocaleDateString();
+}
 
 export class ChatView extends ItemView {
   private messageElements = new Map<string, HTMLElement>();
@@ -35,19 +47,22 @@ export class ChatView extends ItemView {
     this.plugin.scheduleChatSave();
   }
 
-  private headerEl!: HTMLElement;
-  private sessionLabelEl!: HTMLElement;
+  private sessionsHeaderEl!: HTMLElement;
+  private sessionsListEl!: HTMLElement;
   private messagesEl!: HTMLElement;
+  private composerEl!: HTMLElement;
   private contextBarEl!: HTMLElement;
   private inputEl!: HTMLTextAreaElement;
   private sendBtn!: HTMLButtonElement;
   private stopBtn!: HTMLButtonElement;
+  private emptyHintEl!: HTMLElement;
 
   private abortController: AbortController | null = null;
   private generating = false;
   private detachSessions: (() => void) | null = null;
+  private sessionsOpen = true;
 
-  // Per-session input history (in-memory only).
+  // Per-view input history (in-memory only).
   private inputHistory: string[] = [];
   private inputHistoryIdx: number | null = null;
   private inputDraft = "";
@@ -75,44 +90,69 @@ export class ChatView extends ItemView {
     root.empty();
     root.addClass("ai-chat-view");
 
-    this.headerEl = root.createDiv({ cls: "ai-chat-header" });
-    this.renderHeader();
+    // --- Sessions panel ---
+    const sessionsWrap = root.createDiv({ cls: "ai-sessions" });
+    this.sessionsHeaderEl = sessionsWrap.createDiv({ cls: "ai-sessions-header" });
+    this.sessionsListEl = sessionsWrap.createDiv({ cls: "ai-sessions-list" });
+    this.renderSessionsHeader();
+    this.renderSessionsList();
 
+    // --- Messages ---
     this.messagesEl = root.createDiv({ cls: "ai-chat-messages" });
 
-    const inputWrap = root.createDiv({ cls: "ai-chat-input-wrap" });
-    this.contextBarEl = inputWrap.createDiv({ cls: "ai-chat-context-bar" });
+    // --- Composer ---
+    this.composerEl = root.createDiv({ cls: "ai-composer" });
+    this.contextBarEl = this.composerEl.createDiv({ cls: "ai-composer-context" });
     this.updateContextBar();
 
-    this.inputEl = inputWrap.createEl("textarea", { cls: "ai-chat-input" });
-    this.inputEl.placeholder = "Ask anything. Enter to send, Shift+Enter for newline. ↑/↓ for history.";
+    this.inputEl = this.composerEl.createEl("textarea", { cls: "ai-composer-input" });
+    this.inputEl.placeholder = "Message AI Assistant…  (Enter to send · Shift+Enter newline · ↑/↓ history)";
+    this.inputEl.rows = 2;
     this.inputEl.addEventListener("keydown", (e) => this.handleInputKey(e));
     this.inputEl.addEventListener("input", () => {
-      // Once the user starts typing again, drop the history-navigation anchor.
-      if (this.inputHistoryIdx !== null) {
-        this.inputHistoryIdx = null;
-      }
+      if (this.inputHistoryIdx !== null) this.inputHistoryIdx = null;
+      this.autoGrowInput();
     });
 
-    const buttons = inputWrap.createDiv({ cls: "ai-chat-buttons" });
-    this.stopBtn = buttons.createEl("button", { text: "Stop" });
+    const composerBar = this.composerEl.createDiv({ cls: "ai-composer-bar" });
+    const composerLeft = composerBar.createDiv({ cls: "ai-composer-left" });
+    const modelChip = composerLeft.createSpan({ cls: "ai-composer-model" });
+    modelChip.setText(this.plugin.settings.model || "no model set");
+    modelChip.title = "Configured model (change in settings).";
+    modelChip.onclick = () => {
+      // Quick path to settings.
+      const obsApp = this.app as unknown as { setting?: { open: () => void; openTabById: (id: string) => void } };
+      obsApp.setting?.open?.();
+      obsApp.setting?.openTabById?.(this.plugin.manifest.id);
+    };
+
+    const composerRight = composerBar.createDiv({ cls: "ai-composer-right" });
+
+    this.stopBtn = composerRight.createEl("button", { cls: "ai-composer-btn ai-composer-stop" });
+    this.stopBtn.setAttr("aria-label", "Stop");
+    this.stopBtn.title = "Stop";
+    setIcon(this.stopBtn, "square");
     this.stopBtn.disabled = true;
     this.stopBtn.onclick = () => this.stop();
-    this.sendBtn = buttons.createEl("button", { text: "Send", cls: "mod-cta" });
+
+    this.sendBtn = composerRight.createEl("button", { cls: "ai-composer-btn ai-composer-send mod-cta" });
+    this.sendBtn.setAttr("aria-label", "Send");
+    this.sendBtn.title = "Send (Enter)";
+    setIcon(this.sendBtn, "arrow-up");
     this.sendBtn.onclick = () => this.send();
 
-    this.registerEvent(
-      this.app.workspace.on("active-leaf-change", () => this.updateContextBar()),
-    );
-    this.registerEvent(
-      this.app.workspace.on("file-open", () => this.updateContextBar()),
-    );
+    // --- Workspace listeners ---
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.updateContextBar()));
+    this.registerEvent(this.app.workspace.on("file-open", () => this.updateContextBar()));
     this.detachSessions = this.plugin.onSessionsChange(() => {
-      this.renderHeader();
+      this.renderSessionsHeader();
+      this.renderSessionsList();
       this.renderActiveSessionMessages();
+      this.updateEmptyState();
     });
 
     this.renderActiveSessionMessages();
+    this.updateEmptyState();
   }
 
   async onClose(): Promise<void> {
@@ -122,83 +162,160 @@ export class ChatView extends ItemView {
     this.messageElements.clear();
   }
 
-  // -- header / session dropdown --
+  // -- Sessions panel --
 
-  private renderHeader(): void {
-    if (!this.headerEl) return;
-    this.headerEl.empty();
-    const left = this.headerEl.createDiv({ cls: "ai-chat-header-left" });
+  private renderSessionsHeader(): void {
+    const h = this.sessionsHeaderEl;
+    h.empty();
 
-    const picker = left.createEl("button", { cls: "ai-chat-session-picker" });
-    picker.setAttr("aria-label", "Switch chat session");
-    this.sessionLabelEl = picker.createSpan({ cls: "ai-chat-session-label" });
-    this.sessionLabelEl.setText(this.session().title);
-    picker.createSpan({ cls: "ai-chat-session-caret", text: " ▾" });
-    picker.onclick = (e) => this.openSessionMenu(e);
+    const left = h.createDiv({ cls: "ai-sessions-header-left" });
+    const toggle = left.createEl("button", { cls: "ai-sessions-toggle" });
+    toggle.setAttr("aria-label", "Toggle sessions");
+    setIcon(toggle, this.sessionsOpen ? "chevron-down" : "chevron-right");
+    toggle.onclick = () => {
+      this.sessionsOpen = !this.sessionsOpen;
+      this.sessionsListEl.toggleClass("is-collapsed", !this.sessionsOpen);
+      this.renderSessionsHeader();
+    };
+    left.createSpan({ cls: "ai-sessions-label", text: "SESSIONS" });
+    left.createSpan({ cls: "ai-sessions-count", text: `(${this.plugin.sessions.length})` });
 
-    const right = this.headerEl.createDiv({ cls: "ai-chat-header-right" });
-    const newBtn = right.createEl("button", { cls: "ai-chat-icon-btn", text: "+ New" });
+    const right = h.createDiv({ cls: "ai-sessions-header-right" });
+    const newBtn = right.createEl("button", { cls: "ai-sessions-icon-btn" });
     newBtn.setAttr("aria-label", "New chat");
+    newBtn.title = "New chat";
+    setIcon(newBtn, "plus");
     newBtn.onclick = () => {
+      const cur = this.session();
+      if (cur.uiMessages.length === 0 && cur.history.length === 0) {
+        this.inputEl?.focus();
+        new Notice("Already in an empty chat.");
+        return;
+      }
       this.stop();
       this.plugin.createSession();
     };
+
+    const settingsBtn = right.createEl("button", { cls: "ai-sessions-icon-btn" });
+    settingsBtn.setAttr("aria-label", "Plugin settings");
+    settingsBtn.title = "Plugin settings";
+    setIcon(settingsBtn, "settings");
+    settingsBtn.onclick = () => {
+      const obsApp = this.app as unknown as { setting?: { open: () => void; openTabById: (id: string) => void } };
+      obsApp.setting?.open?.();
+      obsApp.setting?.openTabById?.(this.plugin.manifest.id);
+    };
   }
 
-  private openSessionMenu(evt: MouseEvent): void {
-    const menu = new Menu();
-    const active = this.session().id;
-    for (const s of this.plugin.sessions) {
-      menu.addItem((mi) => {
-        mi.setTitle(s.title || "Untitled")
-          .setChecked(s.id === active)
-          .onClick(() => {
-            this.stop();
-            this.plugin.switchSession(s.id);
-          });
-      });
+  private renderSessionsList(): void {
+    const list = this.sessionsListEl;
+    list.empty();
+    list.toggleClass("is-collapsed", !this.sessionsOpen);
+
+    const activeId = this.session().id;
+    // Most recent first.
+    const sorted = [...this.plugin.sessions].sort((a, b) => b.updatedAt - a.updatedAt);
+    for (const s of sorted) {
+      const row = list.createDiv({ cls: "ai-session-row" });
+      if (s.id === activeId) row.addClass("is-active");
+
+      const dot = row.createSpan({ cls: "ai-session-dot" });
+      if (s.id === activeId) dot.addClass("is-active");
+
+      const text = row.createDiv({ cls: "ai-session-text" });
+      const title = text.createDiv({ cls: "ai-session-title" });
+      title.setText(s.title || "Untitled");
+      const meta = text.createDiv({ cls: "ai-session-meta" });
+      const msgs = s.uiMessages.length;
+      meta.setText(`${msgs} msg${msgs === 1 ? "" : "s"} · ${formatRelative(s.updatedAt)}`);
+
+      row.onclick = (e) => {
+        if ((e.target as HTMLElement).closest(".ai-session-row-actions")) return;
+        if (s.id !== activeId) {
+          this.stop();
+          this.plugin.switchSession(s.id);
+        }
+      };
+      row.oncontextmenu = (e) => {
+        e.preventDefault();
+        this.openSessionMenu(e, s);
+      };
+
+      const actions = row.createDiv({ cls: "ai-session-row-actions" });
+      const more = actions.createEl("button", { cls: "ai-session-action" });
+      more.setAttr("aria-label", "Session options");
+      setIcon(more, "more-horizontal");
+      more.onclick = (e) => {
+        e.stopPropagation();
+        this.openSessionMenu(e, s);
+      };
     }
+  }
+
+  private openSessionMenu(evt: MouseEvent, s: ChatSession): void {
+    const menu = new Menu();
+    menu.addItem((mi) => mi.setTitle("Switch to").setIcon("check").onClick(() => {
+      this.stop();
+      this.plugin.switchSession(s.id);
+    }));
+    menu.addItem((mi) =>
+      mi.setTitle("Rename…").setIcon("pencil").onClick(() => {
+        const next = window.prompt("Rename chat", s.title);
+        if (next === null) return;
+        this.plugin.renameSession(s.id, next);
+      }),
+    );
     menu.addSeparator();
     menu.addItem((mi) =>
-      mi.setTitle("Rename current…").setIcon("pencil").onClick(() => this.renameCurrent()),
-    );
-    menu.addItem((mi) =>
       mi
-        .setTitle("Delete current")
+        .setTitle("Delete")
         .setIcon("trash")
-        .onClick(() => this.deleteCurrent()),
+        .onClick(() => {
+          if (!window.confirm(`Delete chat "${s.title}"? This cannot be undone.`)) return;
+          if (s.id === this.session().id) this.stop();
+          this.plugin.deleteSession(s.id);
+        }),
     );
     menu.showAtMouseEvent(evt);
-  }
-
-  private renameCurrent(): void {
-    const cur = this.session();
-    const next = window.prompt("Rename chat", cur.title);
-    if (next === null) return;
-    this.plugin.renameSession(cur.id, next);
-  }
-
-  private deleteCurrent(): void {
-    const cur = this.session();
-    if (!window.confirm(`Delete chat "${cur.title}"? This cannot be undone.`)) return;
-    this.stop();
-    this.plugin.deleteSession(cur.id);
   }
 
   private renderActiveSessionMessages(): void {
     if (!this.messagesEl) return;
     this.messagesEl.empty();
     this.messageElements.clear();
-    if (this.sessionLabelEl) {
-      this.sessionLabelEl.setText(this.session().title);
-    }
     for (const msg of this.uiMessages) {
       if (msg.streaming) msg.streaming = false;
       this.renderMessage(msg);
     }
   }
 
-  // -- input handling --
+  private updateEmptyState(): void {
+    if (!this.messagesEl) return;
+    if (this.uiMessages.length === 0) {
+      if (!this.emptyHintEl || !this.emptyHintEl.isConnected) {
+        this.emptyHintEl = this.messagesEl.createDiv({ cls: "ai-chat-empty" });
+      } else {
+        this.emptyHintEl.empty();
+      }
+      this.emptyHintEl.createDiv({ cls: "ai-chat-empty-title", text: "Start a new conversation" });
+      this.emptyHintEl.createDiv({
+        cls: "ai-chat-empty-sub",
+        text:
+          "Ask about your vault. The model can list, read, search, write and move notes via tools. " +
+          "It remembers vault facts in your memory note (see settings).",
+      });
+    } else if (this.emptyHintEl?.isConnected) {
+      this.emptyHintEl.remove();
+    }
+  }
+
+  // -- Input handling --
+
+  private autoGrowInput(): void {
+    const ta = this.inputEl;
+    ta.style.height = "auto";
+    ta.style.height = Math.min(ta.scrollHeight, 240) + "px";
+  }
 
   private handleInputKey(e: KeyboardEvent): void {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
@@ -206,10 +323,6 @@ export class ChatView extends ItemView {
       this.send();
       return;
     }
-
-    // ↑/↓ recall — only when the textarea is single-line empty, or the caret
-    // is at the very start (↑) / very end (↓) of the buffer. This way arrow
-    // keys keep their normal cursor-movement behavior inside multi-line drafts.
     if (e.key === "ArrowUp" && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
       if (this.canRecallBack()) {
         e.preventDefault();
@@ -229,7 +342,6 @@ export class ChatView extends ItemView {
   private canRecallBack(): boolean {
     if (!this.inputHistory.length) return false;
     if (this.inputHistoryIdx !== null) return this.inputHistoryIdx > 0;
-    // Allow if textarea is empty or caret at start with no newline before.
     const ta = this.inputEl;
     if (ta.value.length === 0) return true;
     return ta.selectionStart === 0 && ta.selectionEnd === 0 && !ta.value.slice(0, ta.selectionStart).includes("\n");
@@ -249,6 +361,7 @@ export class ChatView extends ItemView {
     const v = this.inputHistory[this.inputHistoryIdx];
     this.inputEl.value = v;
     this.inputEl.setSelectionRange(v.length, v.length);
+    this.autoGrowInput();
   }
 
   private recallForward(): void {
@@ -258,17 +371,18 @@ export class ChatView extends ItemView {
       this.inputEl.value = this.inputDraft;
       const len = this.inputDraft.length;
       this.inputEl.setSelectionRange(len, len);
+      this.autoGrowInput();
       return;
     }
     this.inputHistoryIdx += 1;
     const v = this.inputHistory[this.inputHistoryIdx];
     this.inputEl.value = v;
     this.inputEl.setSelectionRange(v.length, v.length);
+    this.autoGrowInput();
   }
 
   private pushInputHistory(text: string): void {
     if (!text) return;
-    // Avoid consecutive duplicates.
     if (this.inputHistory[this.inputHistory.length - 1] === text) return;
     this.inputHistory.push(text);
     if (this.inputHistory.length > MAX_INPUT_HISTORY) {
@@ -278,16 +392,25 @@ export class ChatView extends ItemView {
     this.inputDraft = "";
   }
 
-  // -- view helpers --
+  // -- View helpers --
 
   private updateContextBar(): void {
     if (!this.contextBarEl) return;
     if (!this.plugin.settings.includeActiveNoteInContext) {
       this.contextBarEl.setText("");
+      this.contextBarEl.toggleClass("is-hidden", true);
       return;
     }
     const f = this.app.workspace.getActiveFile();
-    this.contextBarEl.setText(f ? `Context: ${f.path}` : "Context: (no active note)");
+    this.contextBarEl.empty();
+    this.contextBarEl.toggleClass("is-hidden", false);
+    if (f) {
+      const icon = this.contextBarEl.createSpan({ cls: "ai-composer-context-icon" });
+      setIcon(icon, "file-text");
+      this.contextBarEl.createSpan({ cls: "ai-composer-context-path", text: f.path });
+    } else {
+      this.contextBarEl.setText("no active note");
+    }
   }
 
   private stop(): void {
@@ -302,7 +425,7 @@ export class ChatView extends ItemView {
     this.generating = on;
     this.sendBtn.disabled = on;
     this.stopBtn.disabled = !on;
-    this.inputEl.disabled = on;
+    this.composerEl.toggleClass("is-generating", on);
   }
 
   private async activeNoteHint(): Promise<string | null> {
@@ -331,10 +454,46 @@ export class ChatView extends ItemView {
       const content = await this.app.vault.cachedRead(file);
       const trimmed = content.trim();
       if (!trimmed) return null;
-      return `# Persistent memory (from ${path})\nThis is what you previously recorded about this vault. Trust it as up-to-date unless you find conflicting evidence in the vault — in which case update the memory note via write_memory or append_memory.\n\n${trimmed}`;
+      const mtime = file.stat?.mtime ? new Date(file.stat.mtime).toISOString() : "unknown";
+      return `# Persistent memory (from ${path})\nLast modified: ${mtime}\nThis is what you previously recorded about this vault. Trust it as up-to-date unless you find conflicting evidence in the vault — in which case update the memory note via write_memory or append_memory.\n\n${trimmed}`;
     } catch {
       return null;
     }
+  }
+
+  /** Always-on temporal block so the model can reason about recency:
+   *  current local time, when memory was last touched, and how long since the
+   *  previous user message in this session. */
+  private temporalContextHint(): string {
+    const now = new Date();
+    const lines: string[] = ["# Now", `Local time: ${now.toString()}`, `ISO: ${now.toISOString()}`];
+
+    const memPath = this.plugin.settings.memoryNotePath?.trim();
+    if (memPath) {
+      const file = this.app.vault.getAbstractFileByPath(memPath);
+      if (file instanceof TFile && file.stat?.mtime) {
+        lines.push(`Memory note last modified: ${new Date(file.stat.mtime).toISOString()} (${memPath})`);
+      } else {
+        lines.push(`Memory note (${memPath}): not created yet.`);
+      }
+    }
+
+    // Estimate "time since previous user turn" from session uiMessages — the prior
+    // user message's id encodes its timestamp (u_<ms>). Best-effort, never throws.
+    const session = this.session();
+    const priorUser = [...session.uiMessages]
+      .reverse()
+      .find((m, idx) => m.role === "user" && idx > 0);
+    if (priorUser?.id?.startsWith("u_")) {
+      const ts = parseInt(priorUser.id.slice(2), 10);
+      if (Number.isFinite(ts)) {
+        const dt = now.getTime() - ts;
+        if (dt > 0) {
+          lines.push(`Previous user message: ${Math.round(dt / 1000)}s ago.`);
+        }
+      }
+    }
+    return lines.join("\n");
   }
 
   private renderMessage(msg: UiMessage): void {
@@ -362,6 +521,7 @@ export class ChatView extends ItemView {
 
     this.pushInputHistory(text);
     this.inputEl.value = "";
+    this.autoGrowInput();
 
     const userUi: UiMessage = {
       id: `u_${Date.now()}`,
@@ -371,7 +531,8 @@ export class ChatView extends ItemView {
     this.uiMessages.push(userUi);
     this.renderMessage(userUi);
     this.plugin.maybeAutoTitle(this.session());
-    if (this.sessionLabelEl) this.sessionLabelEl.setText(this.session().title);
+    this.renderSessionsList();
+    this.updateEmptyState();
     this.persist();
 
     this.abortController = new AbortController();
@@ -388,15 +549,8 @@ export class ChatView extends ItemView {
     );
 
     const [activeHint, memHint] = await Promise.all([this.activeNoteHint(), this.memoryHint()]);
-    const hint = [memHint, activeHint].filter((x): x is string => !!x).join("\n\n") || null;
-
-    const finalizeAssistantUi = (id: string | null) => {
-      if (!id) return;
-      const ui = this.getUi(id);
-      if (!ui) return;
-      ui.streaming = false;
-      this.renderMessage(ui);
-    };
+    const temporal = this.temporalContextHint();
+    const hint = [temporal, memHint, activeHint].filter((x): x is string => !!x).join("\n\n");
 
     await agent.runTurn(
       text,
@@ -411,7 +565,6 @@ export class ChatView extends ItemView {
             streaming: true,
           };
           sessionAtStart.uiMessages.push(ui);
-          // Only render if user hasn't switched away.
           if (this.session().id === sessionAtStart.id) this.renderMessage(ui);
         },
         onContentDelta: (id, delta) => {
@@ -446,7 +599,6 @@ export class ChatView extends ItemView {
           this.plugin.scheduleChatSave();
         },
         onError: (err, currentAssistantId) => {
-          // Clear the streaming flag so the UI doesn't look hung.
           if (currentAssistantId) {
             const ui = sessionAtStart.uiMessages.find((m) => m.id === currentAssistantId);
             if (ui) {
@@ -467,16 +619,18 @@ export class ChatView extends ItemView {
       this.abortController.signal,
     );
 
-    // Belt-and-braces: clear any lingering streaming flag on the last assistant
-    // message in this turn (covers signal aborts and edge paths in the agent).
     const lastAssistant = [...sessionAtStart.uiMessages].reverse().find((m) => m.role === "assistant");
     if (lastAssistant?.streaming) {
       lastAssistant.streaming = false;
-      if (this.session().id === sessionAtStart.id) finalizeAssistantUi(lastAssistant.id);
+      if (this.session().id === sessionAtStart.id) {
+        const ui = this.getUi(lastAssistant.id);
+        if (ui) this.renderMessage(ui);
+      }
       this.plugin.scheduleChatSave();
     }
 
     this.setGenerating(false);
     this.abortController = null;
+    this.renderSessionsList();
   }
 }

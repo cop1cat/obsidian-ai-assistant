@@ -16,7 +16,16 @@ Rules:
 - For edit_file, old_string must match exactly once (including whitespace).
 - When creating new notes, infer the vault's naming convention from existing files (folders, casing, date formats).
 - Use [[wikilinks]] when referring to notes in your responses.
-- Be concise. Show what you did, not what you are about to do.`;
+- Be concise. Show what you did, not what you are about to do.
+
+Safety — do not perform destructive operations without an explicit user request:
+- "Explicit" means the user named the file/folder or unambiguously asked to delete/overwrite/revert. Vague requests ("clean up", "fix this") are NOT explicit consent for destruction.
+- Never delete_file unless the user explicitly asked to delete that file by name or path.
+- Never overwrite (write_file with overwrite=true), edit_file, or append_to_file in a way that removes or rewrites the user's existing prose, unless they asked for that specific change. Adding new content alongside the user's is fine.
+- Never roll back or undo changes you find in a file. Treat the current vault content as the user's source of truth — newer than your memory or expectations.
+- Never move/rename or create_folder for files/folders the user did not mention, even if it would "tidy up" the vault.
+- If you are unsure whether an action is destructive or whether the user wants it, ASK first. Prefer a clarifying question over a destructive action.
+- If a destructive action is the natural next step but wasn't requested, propose it in your reply and wait for confirmation before calling the tool.`;
 
 export interface PluginSettings {
   baseUrl: string;

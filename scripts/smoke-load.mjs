@@ -58,6 +58,7 @@ class Menu {
 const MarkdownRenderer = { render: async () => {} };
 function normalizePath(p) { return p.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\.\//, ""); }
 function getAllTags() { return []; }
+function setIcon() {}
 
 function makeEl() {
   const el = {
@@ -78,7 +79,7 @@ function makeEl() {
 const obsidianMock = {
   Plugin, ItemView, PluginSettingTab, Setting,
   TFile, TFolder, WorkspaceLeaf, Component, Notice, Modal, Menu,
-  MarkdownRenderer, normalizePath, getAllTags,
+  MarkdownRenderer, normalizePath, getAllTags, setIcon,
 };
 
 // Intercept require("obsidian") inside the bundle.

@@ -69,7 +69,15 @@ export class MessageRenderer {
 
     const contentEl = container.createDiv({ cls: "ai-chat-content" });
     if (msg.streaming && !msg.content) {
-      contentEl.addClass("ai-chat-streaming-cursor");
+      // No text yet — show a typing indicator instead of an invisible block,
+      // unless a tool is currently running (the tool row already animates).
+      const toolRunning = msg.toolCalls?.some((t) => t.status === "running");
+      if (!toolRunning) {
+        const dots = contentEl.createDiv({ cls: "ai-chat-typing" });
+        dots.createSpan({ cls: "ai-chat-typing-dot" });
+        dots.createSpan({ cls: "ai-chat-typing-dot" });
+        dots.createSpan({ cls: "ai-chat-typing-dot" });
+      }
     } else {
       this.renderMarkdown(contentEl, msg.content || "");
       if (msg.streaming) contentEl.addClass("ai-chat-streaming-cursor");
@@ -178,15 +186,41 @@ export class MessageRenderer {
   private renderMarkdown(target: HTMLElement, source: string): void {
     target.empty();
     if (!source) return;
-    // sourcePath is empty — wiki-links resolve against vault root, which is fine for chat.
-    MarkdownRenderer.render(
-      this.plugin.app,
-      source,
-      target,
-      "",
-      this.host,
-    ).catch(() => {
-      target.setText(source);
+    const sourcePath = this.plugin.app.workspace.getActiveFile()?.path ?? "";
+    MarkdownRenderer.render(this.plugin.app, source, target, sourcePath, this.host)
+      .then(() => this.wireInternalLinks(target, sourcePath))
+      .catch(() => {
+        target.setText(source);
+      });
+  }
+
+  private wireInternalLinks(target: HTMLElement, sourcePath: string): void {
+    // Obsidian's MarkdownRenderer produces <a class="internal-link" data-href="..."> for
+    // [[wikilinks]], but doesn't auto-wire navigation inside custom ItemViews. Delegate
+    // clicks to workspace.openLinkText, and forward hover for native link previews.
+    const app = this.plugin.app;
+    target.addEventListener("click", (e) => {
+      const a = (e.target as HTMLElement | null)?.closest?.("a.internal-link") as HTMLAnchorElement | null;
+      if (!a) return;
+      e.preventDefault();
+      const href = a.getAttribute("data-href") || a.getAttribute("href") || a.textContent || "";
+      if (!href) return;
+      const newLeaf = e.ctrlKey || e.metaKey;
+      app.workspace.openLinkText(href, sourcePath, newLeaf);
+    });
+    target.addEventListener("mouseover", (e) => {
+      const a = (e.target as HTMLElement | null)?.closest?.("a.internal-link") as HTMLAnchorElement | null;
+      if (!a) return;
+      const href = a.getAttribute("data-href") || a.getAttribute("href") || a.textContent || "";
+      if (!href) return;
+      app.workspace.trigger("hover-link", {
+        event: e,
+        source: "ai-assistant-chat",
+        hoverParent: this.host,
+        targetEl: a,
+        linktext: href,
+        sourcePath,
+      });
     });
   }
 }

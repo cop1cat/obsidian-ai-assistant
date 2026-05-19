@@ -123,7 +123,9 @@
 
 .ai-sessions-search {
   flex-shrink: 0;
-  padding: 8px 10px 4px 10px;
+  /* horizontal padding must match .ai-session-row's `margin: 1px 6px` so the
+   * search input lines up with the active-chat highlight underneath. */
+  padding: 8px 6px 6px 6px;
 }
 .ai-sessions-search-input {
   width: 100%;
@@ -187,7 +189,9 @@
   justify-content: center;
 }
 .ai-session-action:hover {
-  background: var(--background-modifier-error-hover, var(--background-modifier-hover));
+  /* Keep the icon visible: tint the background subtly, paint the border and
+   * icon in the error colour. Avoid the all-red fill that hid the trash icon. */
+  background: var(--background-primary);
   color: var(--text-error);
   border-color: var(--text-error);
 }

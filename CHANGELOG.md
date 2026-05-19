@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] — 2026-05-20
+
+### Fixed
+- Search input in the sessions list now aligns horizontally with the active-chat highlight underneath. The search wrapper's horizontal padding (`6px`) matches the row's `margin: 1px 6px`, so left/right edges line up.
+- Hover state of the per-row trash button no longer fills the button solid red (which hid the icon). Background stays `--background-primary`; border and icon turn `--text-error` for a clear "danger" cue with the icon still visible.
+
 ## [0.3.5] — 2026-05-20
 
 ### Fixed

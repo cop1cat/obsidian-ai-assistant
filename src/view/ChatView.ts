@@ -10,16 +10,32 @@ export const VIEW_TYPE_AI_CHAT = "ai-assistant-chat";
 const MAX_ACTIVE_NOTE_CHARS = 12_000;
 const MAX_INPUT_HISTORY = 50;
 
-function formatRelative(ts: number): string {
-  const diff = Date.now() - ts;
-  if (diff < 60_000) return "just now";
-  const m = Math.floor(diff / 60_000);
-  if (m < 60) return `${m} min${m === 1 ? "" : "s"} ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h} hr${h === 1 ? "" : "s"} ago`;
-  const d = Math.floor(h / 24);
-  if (d < 30) return `${d} day${d === 1 ? "" : "s"} ago`;
-  return new Date(ts).toLocaleDateString();
+function formatSessionTime(ts: number): string {
+  const d = new Date(ts);
+  const now = new Date();
+  const hhmm = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  if (sameDay) return hhmm;
+
+  const yest = new Date(now);
+  yest.setDate(now.getDate() - 1);
+  const isYesterday =
+    d.getFullYear() === yest.getFullYear() &&
+    d.getMonth() === yest.getMonth() &&
+    d.getDate() === yest.getDate();
+  if (isYesterday) return `Yesterday ${hhmm}`;
+
+  const sameYear = d.getFullYear() === now.getFullYear();
+  const datePart = d.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    ...(sameYear ? {} : { year: "numeric" }),
+  });
+  return `${datePart}, ${hhmm}`;
 }
 
 export class ChatView extends ItemView {
@@ -69,6 +85,8 @@ export class ChatView extends ItemView {
   private generating = false;
   private detachSessions: (() => void) | null = null;
   private mode: "list" | "chat" = "list";
+  private searchQuery = "";
+  private searchInputEl: HTMLInputElement | null = null;
 
   // Per-view input history (in-memory only).
   private inputHistory: string[] = [];
@@ -226,10 +244,32 @@ export class ChatView extends ItemView {
     this.stopBtn = null;
     this.emptyHintEl = null;
     this.scrollBottomBtn = null;
+    this.searchInputEl = null;
     this.messageElements.clear();
     this.stickToBottom = true;
 
     if (this.mode === "list") {
+      const searchWrap = body.createDiv({ cls: "ai-sessions-search" });
+      const searchInput = searchWrap.createEl("input", {
+        cls: "ai-sessions-search-input",
+        type: "search",
+      });
+      searchInput.placeholder = "Search chats… (title or message)";
+      searchInput.value = this.searchQuery;
+      searchInput.addEventListener("input", () => {
+        this.searchQuery = searchInput.value;
+        this.renderSessionsList();
+      });
+      searchInput.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && searchInput.value) {
+          e.preventDefault();
+          searchInput.value = "";
+          this.searchQuery = "";
+          this.renderSessionsList();
+        }
+      });
+      this.searchInputEl = searchInput;
+
       this.sessionsListEl = body.createDiv({ cls: "ai-sessions-list" });
       this.renderSessionsList();
     } else {
@@ -333,7 +373,53 @@ export class ChatView extends ItemView {
       return;
     }
 
-    for (const s of sorted) {
+    const q = this.searchQuery.trim().toLowerCase();
+    type Hit = {
+      session: ChatSession;
+      titleMatch: boolean;
+      contentMatch: boolean;
+      snippet: string | null;
+    };
+    let hits: Hit[];
+    if (!q) {
+      hits = sorted.map((s) => ({
+        session: s,
+        titleMatch: false,
+        contentMatch: false,
+        snippet: null,
+      }));
+    } else {
+      hits = [];
+      for (const s of sorted) {
+        const titleMatch = (s.title || "").toLowerCase().includes(q);
+        let snippet: string | null = null;
+        let contentMatch = false;
+        for (const m of s.uiMessages) {
+          const c = (m.content || "").toLowerCase();
+          const i = c.indexOf(q);
+          if (i >= 0) {
+            contentMatch = true;
+            const raw = m.content || "";
+            const start = Math.max(0, i - 24);
+            const end = Math.min(raw.length, i + q.length + 40);
+            snippet =
+              (start > 0 ? "…" : "") +
+              raw.slice(start, end).replace(/\s+/g, " ").trim() +
+              (end < raw.length ? "…" : "");
+            break;
+          }
+        }
+        if (!titleMatch && !contentMatch) continue;
+        hits.push({ session: s, titleMatch, contentMatch, snippet });
+      }
+    }
+
+    if (hits.length === 0) {
+      list.createDiv({ cls: "ai-sessions-empty", text: `No chats match "${this.searchQuery}".` });
+      return;
+    }
+
+    for (const { session: s, titleMatch, contentMatch, snippet } of hits) {
       const row = list.createDiv({ cls: "ai-session-row" });
       if (s.id === activeId) row.addClass("is-active");
 
@@ -342,10 +428,27 @@ export class ChatView extends ItemView {
 
       const text = row.createDiv({ cls: "ai-session-text" });
       const title = text.createDiv({ cls: "ai-session-title" });
-      title.setText(s.title || "Untitled");
+      if (q && titleMatch) {
+        this.renderHighlighted(title, s.title || "Untitled", q);
+      } else {
+        title.setText(s.title || "Untitled");
+      }
+
       const meta = text.createDiv({ cls: "ai-session-meta" });
       const msgs = s.uiMessages.length;
-      meta.setText(`${msgs} msg${msgs === 1 ? "" : "s"} · ${formatRelative(s.updatedAt)}`);
+      const parts = [`${msgs} msg${msgs === 1 ? "" : "s"}`, formatSessionTime(s.updatedAt)];
+      if (q) {
+        const where =
+          titleMatch && contentMatch ? "in title + message" : titleMatch ? "in title" : "in message";
+        parts.push(where);
+      }
+      meta.setText(parts.join(" · "));
+      meta.title = new Date(s.updatedAt).toLocaleString();
+
+      if (snippet) {
+        const snipEl = text.createDiv({ cls: "ai-session-snippet" });
+        this.renderHighlighted(snipEl, snippet, q);
+      }
 
       row.onclick = () => {
         if (s.id !== activeId) {
@@ -358,6 +461,31 @@ export class ChatView extends ItemView {
         e.preventDefault();
         this.openSessionMenu(e, s);
       };
+    }
+  }
+
+  /** Render `text` into `host`, wrapping case-insensitive matches of `query`
+   *  in <mark>. Uses textContent on the slices to avoid XSS. */
+  private renderHighlighted(host: HTMLElement, text: string, query: string): void {
+    host.empty();
+    const q = query.trim();
+    if (!q) {
+      host.setText(text);
+      return;
+    }
+    const ql = q.toLowerCase();
+    const lower = text.toLowerCase();
+    let i = 0;
+    while (i < text.length) {
+      const found = lower.indexOf(ql, i);
+      if (found < 0) {
+        host.appendText(text.slice(i));
+        return;
+      }
+      if (found > i) host.appendText(text.slice(i, found));
+      const mark = host.createEl("mark", { cls: "ai-search-hit" });
+      mark.setText(text.slice(found, found + q.length));
+      i = found + q.length;
     }
   }
 

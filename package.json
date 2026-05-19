@@ -1,6 +1,6 @@
 {
   "name": "obsidian-ai-assistant",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Local AI assistant with tool calling for Obsidian (OpenAI-compatible / vLLM)",
   "main": "main.js",
   "scripts": {

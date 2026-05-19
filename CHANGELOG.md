@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-05-20
+
+### Added
+- Search box at the top of the sessions list. Live-filters as you type, matching session titles *and* the contents of any message in the session. Matched substrings are highlighted with `<mark>` in both the title and a short snippet (±24/40 chars around the match, clamped to two lines). A small marker on the meta row (`in title` / `in message` / `in title + message`) tells you where the hit was found. `Esc` clears the query.
+- Sessions now show the **absolute timestamp** of the last update instead of a relative "5 minutes ago" — same-day: `14:23`; yesterday: `Yesterday 14:23`; this year: `12 May, 14:23`; older: `12 May 2025, 14:23`. Locale-aware. Hover the meta row to see the full date/time.
+
+### Changed
+- List-mode header re-balanced: gap between "New chat" and ⚙ widened to 8px; the ⚙ button is now a square 28×28 with a 6px radius so it doesn't look "rectangular-glued" to the accent button.
+
 ## [0.3.1] — 2026-05-20
 
 ### Added

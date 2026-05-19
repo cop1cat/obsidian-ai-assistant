@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] — 2026-05-20
+
+### Added
+- Syntax highlighting for fenced code blocks in assistant messages. Uses Obsidian's bundled Prism (`window.Prism`); unknown languages fall back to plain monospace. Each block is wrapped with a small header showing the language and a **Copy** button.
+
+### Changed
+- Scroll-to-bottom button is bigger and louder: 36×36 (was 32), icon 20×20 (was 16), fully opaque. On hover it fills with the accent colour (background + border + icon) instead of just dimming.
+- "New chat" button height locked to 28px with `line-height: 1` so it aligns with the square ⚙ next to it — no more vertical misalignment in the header.
+- Per-row trash button restyled: 28×28 with a border and primary background; on hover the border and icon turn `--text-error`. Removed the pill wrapper that made the action area look like an awkward bar.
+
+### Fixed
+- Assistant messages with long code blocks or unbroken strings no longer stretch the chat pane past the container width. The message bubble (`.ai-chat-msg`), its content area, and the messages container now propagate `min-width: 0` / `max-width: 100%` properly; long code scrolls horizontally inside the code block instead of pushing the bubble out.
+
 ## [0.3.3] — 2026-05-20
 
 ### Added

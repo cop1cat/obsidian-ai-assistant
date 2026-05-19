@@ -70,13 +70,17 @@
 .ai-chat-header-btn .svg-icon { width: 16px; height: 16px; }
 
 .ai-chat-header-new {
+  /* override the square 28x28 .ai-chat-header-btn so the label fits. */
+  width: auto;
+  height: 28px;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
+  gap: 6px;
+  padding: 0 10px;
   font-size: 12px;
   font-weight: 500;
-  border-radius: 5px;
+  line-height: 1;
+  border-radius: 6px;
   color: var(--text-on-accent);
   background: var(--interactive-accent);
 }
@@ -84,7 +88,11 @@
   background: var(--interactive-accent-hover);
   color: var(--text-on-accent);
 }
-.ai-chat-header-new-icon { display: inline-flex; }
+.ai-chat-header-new-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
 .ai-chat-header-new-icon .svg-icon { width: 14px; height: 14px; }
 .ai-chat-header-new-label { line-height: 1; }
 
@@ -152,7 +160,7 @@
 /* Hover-revealed row actions (trash, …) */
 .ai-session-row-actions {
   position: absolute;
-  right: 6px;
+  right: 8px;
   top: 50%;
   transform: translateY(-50%);
   display: flex;
@@ -160,24 +168,18 @@
   gap: 2px;
   opacity: 0;
   transition: opacity 0.12s ease;
-  background: var(--background-modifier-hover);
-  padding: 2px 2px 2px 8px;
-  border-radius: 4px;
-}
-.ai-session-row.is-active .ai-session-row-actions {
-  background: var(--background-secondary);
 }
 .ai-session-row:hover .ai-session-row-actions,
 .ai-session-row:focus-within .ai-session-row-actions {
   opacity: 1;
 }
 .ai-session-action {
-  background: transparent;
-  border: none;
-  width: 24px;
-  height: 24px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  width: 28px;
+  height: 28px;
   padding: 0;
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
   color: var(--text-muted);
   display: inline-flex;
@@ -185,10 +187,101 @@
   justify-content: center;
 }
 .ai-session-action:hover {
-  background: var(--background-modifier-hover);
+  background: var(--background-modifier-error-hover, var(--background-modifier-hover));
   color: var(--text-error);
+  border-color: var(--text-error);
 }
-.ai-session-action .svg-icon { width: 14px; height: 14px; }
+.ai-session-action .svg-icon { width: 16px; height: 16px; }
+
+/* === Code blocks with syntax highlighting + header === */
+.ai-code-block {
+  position: relative;
+  margin: 8px 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--code-background, var(--background-secondary));
+}
+.ai-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: var(--background-secondary-alt, var(--background-secondary));
+  border-bottom: 1px solid var(--background-modifier-border);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.ai-code-lang {
+  font-family: var(--font-monospace);
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+.ai-code-copy {
+  background: transparent;
+  border: none;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.ai-code-copy:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+.ai-code-block pre {
+  margin: 0;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  overflow-x: auto;
+  font-family: var(--font-monospace);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.ai-code-block pre > code {
+  background: transparent;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--text-normal);
+}
+/* Prism token colours — defer to whatever Obsidian's theme defines so light /
+ * dark themes stay coherent. These selectors mirror Obsidian's own .token.* */
+.ai-code-block .token.comment,
+.ai-code-block .token.prolog,
+.ai-code-block .token.doctype,
+.ai-code-block .token.cdata { color: var(--code-comment, var(--text-faint)); font-style: italic; }
+.ai-code-block .token.punctuation { color: var(--code-punctuation, var(--text-muted)); }
+.ai-code-block .token.property,
+.ai-code-block .token.tag,
+.ai-code-block .token.boolean,
+.ai-code-block .token.number,
+.ai-code-block .token.constant,
+.ai-code-block .token.symbol,
+.ai-code-block .token.deleted { color: var(--code-property, var(--color-orange)); }
+.ai-code-block .token.selector,
+.ai-code-block .token.attr-name,
+.ai-code-block .token.string,
+.ai-code-block .token.char,
+.ai-code-block .token.builtin,
+.ai-code-block .token.inserted { color: var(--code-string, var(--color-green)); }
+.ai-code-block .token.operator,
+.ai-code-block .token.entity,
+.ai-code-block .token.url,
+.ai-code-block .token.variable { color: var(--code-operator, var(--color-cyan)); }
+.ai-code-block .token.atrule,
+.ai-code-block .token.attr-value,
+.ai-code-block .token.keyword { color: var(--code-keyword, var(--color-purple)); }
+.ai-code-block .token.function,
+.ai-code-block .token.class-name { color: var(--code-function, var(--color-blue)); }
+.ai-code-block .token.regex,
+.ai-code-block .token.important { color: var(--color-yellow); }
+.ai-code-block .token.important,
+.ai-code-block .token.bold { font-weight: bold; }
+.ai-code-block .token.italic { font-style: italic; }
 
 /* Inline rename input — used by both the chat header title and list rows. */
 .ai-inline-rename-input {
@@ -390,18 +483,21 @@
 .ai-chat-messages {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   gap: 12px;
   padding: 12px;
+  min-width: 0;
 }
+.ai-chat-messages > div { min-width: 0; max-width: 100%; }
 
 .ai-scroll-bottom-btn {
   position: absolute;
   right: 14px;
   bottom: 12px;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   border: 1px solid var(--background-modifier-border);
   background: var(--background-secondary);
@@ -410,19 +506,18 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
-  opacity: 0.95;
-  transition: opacity 0.12s ease, transform 0.12s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
   z-index: 2;
 }
 .ai-scroll-bottom-btn:hover {
-  background: var(--background-modifier-hover);
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+  color: var(--text-on-accent);
   transform: translateY(-1px);
 }
-.ai-scroll-bottom-btn.is-hidden {
-  display: none;
-}
-.ai-scroll-bottom-btn .svg-icon { width: 16px; height: 16px; }
+.ai-scroll-bottom-btn.is-hidden { display: none; }
+.ai-scroll-bottom-btn .svg-icon { width: 20px; height: 20px; }
 
 .ai-chat-msg {
   border-radius: 6px;
@@ -433,10 +528,22 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* Stop long content (code blocks, wide pre, no-break strings) from pushing
+   * the bubble past the container width. */
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
 }
-.ai-chat-msg > * { margin: 0; }
+.ai-chat-msg > * {
+  margin: 0;
+  min-width: 0;
+  max-width: 100%;
+}
+.ai-chat-content { min-width: 0; word-wrap: break-word; overflow-wrap: anywhere; }
 .ai-chat-content > :first-child { margin-top: 0; }
 .ai-chat-content > :last-child { margin-bottom: 0; }
+.ai-chat-content pre { max-width: 100%; overflow-x: auto; }
 
 .ai-chat-msg.user {
   background: var(--background-modifier-hover);

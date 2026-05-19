@@ -2,6 +2,11 @@ import { Component, MarkdownRenderer } from "obsidian";
 import type AIAssistantPlugin from "../main";
 import type { UiMessage, UiToolCall } from "../llm/types";
 
+interface PrismLike {
+  languages: Record<string, unknown>;
+  highlightElement(el: HTMLElement): void;
+}
+
 function shortArgs(raw: string): string {
   try {
     const obj = JSON.parse(raw);
@@ -188,10 +193,61 @@ export class MessageRenderer {
     if (!source) return;
     const sourcePath = this.plugin.app.workspace.getActiveFile()?.path ?? "";
     MarkdownRenderer.render(this.plugin.app, source, target, sourcePath, this.host)
-      .then(() => this.wireInternalLinks(target, sourcePath))
+      .then(() => {
+        this.wireInternalLinks(target, sourcePath);
+        this.decorateCodeBlocks(target);
+      })
       .catch(() => {
         target.setText(source);
       });
+  }
+
+  /** Obsidian's MarkdownRenderer emits <pre><code class="language-X"> but does
+   *  not apply Prism highlighting outside of the editor preview. Obsidian
+   *  ships Prism on `window.Prism`; if a language is known, highlight in place.
+   *  Also wraps each block with a small header (language + Copy button). */
+  private decorateCodeBlocks(target: HTMLElement): void {
+    const prism = (window as unknown as { Prism?: PrismLike }).Prism;
+    const blocks = target.querySelectorAll("pre > code");
+    blocks.forEach((codeNode) => {
+      const code = codeNode as HTMLElement;
+      const pre = code.parentElement as HTMLPreElement | null;
+      if (!pre || pre.dataset.aiHighlighted === "1") return;
+      pre.dataset.aiHighlighted = "1";
+
+      const langClass = Array.from(code.classList).find((c) => c.startsWith("language-"));
+      const lang = langClass ? langClass.slice("language-".length) : "";
+
+      if (prism && lang && prism.languages && prism.languages[lang]) {
+        try {
+          prism.highlightElement(code);
+        } catch {
+          // Best-effort; if Prism throws on bad input, leave the code as-is.
+        }
+      }
+
+      // Wrap pre in a container with a small header (language + copy button).
+      const wrap = pre.doc.createElement("div");
+      wrap.className = "ai-code-block";
+      pre.parentNode?.insertBefore(wrap, pre);
+
+      const head = wrap.createDiv({ cls: "ai-code-head" });
+      head.createSpan({ cls: "ai-code-lang", text: lang || "text" });
+      const copyBtn = head.createEl("button", { cls: "ai-code-copy", text: "Copy" });
+      copyBtn.onclick = async (e) => {
+        e.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(code.innerText);
+          copyBtn.setText("Copied");
+          window.setTimeout(() => copyBtn.setText("Copy"), 1200);
+        } catch {
+          copyBtn.setText("Failed");
+          window.setTimeout(() => copyBtn.setText("Copy"), 1200);
+        }
+      };
+
+      wrap.appendChild(pre);
+    });
   }
 
   private wireInternalLinks(target: HTMLElement, sourcePath: string): void {

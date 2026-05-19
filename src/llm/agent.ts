@@ -13,7 +13,7 @@ export interface AgentCallbacks {
   onToolCallStart: (id: string, callId: string, name: string, args: string) => void;
   onToolCallResult: (id: string, callId: string, ok: boolean, result: string) => void;
   onAssistantEnd: (id: string) => void;
-  onError: (err: Error) => void;
+  onError: (err: Error, currentAssistantId: string | null) => void;
 }
 
 export class Agent {
@@ -40,6 +40,7 @@ export class Agent {
     cb: AgentCallbacks,
     signal: AbortSignal,
   ): Promise<void> {
+    let currentAssistantId: string | null = null;
     try {
       let history = this.getHistory();
       history = [...history, { role: "user", content: userText }];
@@ -61,6 +62,7 @@ export class Agent {
 
       for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
         const assistantUiId = `m_${Date.now()}_${iter}`;
+        currentAssistantId = assistantUiId;
         cb.onAssistantStart(assistantUiId);
 
         const messages: ChatMessage[] = [
@@ -83,6 +85,7 @@ export class Agent {
           role: "assistant",
           content: result.content || null,
           tool_calls: result.toolCalls.length ? result.toolCalls : undefined,
+          ...(result.reasoningContent ? { reasoning_content: result.reasoningContent } : {}),
         };
         this.setHistory([...this.getHistory(), assistantMsg]);
 
@@ -116,10 +119,11 @@ export class Agent {
         new Error(
           `Tool-call loop exceeded ${MAX_TOOL_ITERATIONS} iterations without a final answer.`,
         ),
+        currentAssistantId,
       );
     } catch (e) {
       if ((e as Error).name === "AbortError" || signal.aborted) return;
-      cb.onError(e as Error);
+      cb.onError(e as Error, currentAssistantId);
     }
   }
 

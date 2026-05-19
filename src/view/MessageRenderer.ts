@@ -37,8 +37,28 @@ export class MessageRenderer {
     container.empty();
     container.addClass("ai-chat-msg", msg.role);
 
-    const role = container.createDiv({ cls: "ai-chat-role" });
+    const header = container.createDiv({ cls: "ai-chat-msg-header" });
+    const role = header.createDiv({ cls: "ai-chat-role" });
     role.setText(msg.role === "user" ? "You" : msg.role === "error" ? "Error" : "Assistant");
+
+    // Copy button — only meaningful once there's some text to copy and we're
+    // not mid-stream. Tool-call previews are not included in the copy payload
+    // since they're rendered as separate blocks.
+    if (!msg.streaming && msg.content) {
+      const copy = header.createEl("button", { cls: "ai-chat-copy-btn", text: "Copy" });
+      copy.setAttr("aria-label", "Copy message");
+      copy.onclick = async (e) => {
+        e.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(msg.content);
+          copy.setText("Copied");
+          window.setTimeout(() => copy.setText("Copy"), 1200);
+        } catch {
+          copy.setText("Failed");
+          window.setTimeout(() => copy.setText("Copy"), 1200);
+        }
+      };
+    }
 
     if (msg.toolCalls && msg.toolCalls.length) {
       const toolsWrap = container.createDiv();

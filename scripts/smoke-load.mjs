@@ -37,12 +37,24 @@ class Setting {
   addText(cb) { cb({ setPlaceholder: () => ({ setValue: () => ({ onChange: () => ({}) }) }), setValue: () => ({ onChange: () => ({}) }) }); return this; }
   addToggle(cb) { cb({ setValue: () => ({ onChange: () => ({}) }) }); return this; }
   addTextArea(cb) { cb({ setValue: () => ({ onChange: () => ({}) }), inputEl: { rows: 0, style: {} } }); return this; }
+  addButton(cb) { cb({ setButtonText: () => ({ onClick: () => ({}) }) }); return this; }
+  addExtraButton(cb) { cb({ setIcon: () => ({ setTooltip: () => ({ onClick: () => ({}) }) }) }); return this; }
 }
 class TFile {}
 class TFolder {}
 class WorkspaceLeaf {}
 class Component {}
 class Notice {}
+class Modal {
+  constructor(app) { this.app = app; this.contentEl = makeEl(); this.modalEl = makeEl(); }
+  open() {}
+  close() {}
+}
+class Menu {
+  addItem() { return this; }
+  addSeparator() { return this; }
+  showAtMouseEvent() {}
+}
 const MarkdownRenderer = { render: async () => {} };
 function normalizePath(p) { return p.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\.\//, ""); }
 function getAllTags() { return []; }
@@ -65,7 +77,7 @@ function makeEl() {
 
 const obsidianMock = {
   Plugin, ItemView, PluginSettingTab, Setting,
-  TFile, TFolder, WorkspaceLeaf, Component, Notice,
+  TFile, TFolder, WorkspaceLeaf, Component, Notice, Modal, Menu,
   MarkdownRenderer, normalizePath, getAllTags,
 };
 

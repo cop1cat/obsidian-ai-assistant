@@ -5,6 +5,7 @@ import type { ToolSchema } from "../tools";
 
 export interface StreamChunk {
   contentDelta?: string;
+  reasoningDelta?: string;
   toolCallDeltas?: Array<{
     index: number;
     id?: string;
@@ -15,8 +16,25 @@ export interface StreamChunk {
 
 export interface StreamResult {
   content: string;
+  reasoningContent: string;
   toolCalls: ToolCall[];
   finishReason: string | null;
+}
+
+function parseExtraBody(raw: string): Record<string, unknown> | null {
+  const s = raw?.trim();
+  if (!s) return null;
+  try {
+    const parsed = JSON.parse(s);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    console.warn("AI Assistant: extra body must be a JSON object, got", typeof parsed);
+    return null;
+  } catch (e) {
+    console.warn("AI Assistant: invalid JSON in extra body, ignoring.", e);
+    return null;
+  }
 }
 
 export class LLMClient {
@@ -52,9 +70,15 @@ export class LLMClient {
       params.tool_choice = "auto";
     }
 
+    // Merge user-supplied extra params (e.g. {"chat_template_kwargs":{"enable_thinking":false}}).
+    // Invalid JSON is silently dropped — surfaced to console so the user can spot it.
+    const extra = parseExtraBody(this.settings.extraBody);
+    if (extra) Object.assign(params as unknown as Record<string, unknown>, extra);
+
     const stream = await this.client.chat.completions.create(params, { signal });
 
     let content = "";
+    let reasoningContent = "";
     const accumulated: Array<{ id: string; name: string; arguments: string }> = [];
     let finishReason: string | null = null;
 
@@ -65,6 +89,17 @@ export class LLMClient {
       if (delta?.content) {
         content += delta.content;
         onChunk({ contentDelta: delta.content });
+      }
+      // vLLM / SGLang / Qwen / DeepSeek-R1 surface thinking text on a non-standard
+      // `reasoning_content` field. Some servers (and the OpenAI thinking variant)
+      // use `reasoning`. Both must be echoed back as `assistant.reasoning_content`
+      // on the next request or the server rejects the turn.
+      const reasoningDelta =
+        (delta as unknown as { reasoning_content?: string; reasoning?: string })?.reasoning_content
+        ?? (delta as unknown as { reasoning?: string })?.reasoning;
+      if (reasoningDelta) {
+        reasoningContent += reasoningDelta;
+        onChunk({ reasoningDelta });
       }
       if (delta?.tool_calls) {
         const tcDeltas: NonNullable<StreamChunk["toolCallDeltas"]> = [];
@@ -96,7 +131,7 @@ export class LLMClient {
         function: { name: a.name, arguments: a.arguments || "{}" },
       }));
 
-    return { content, toolCalls, finishReason };
+    return { content, reasoningContent, toolCalls, finishReason };
   }
 
   async complete(messages: ChatMessage[], signal?: AbortSignal): Promise<string> {

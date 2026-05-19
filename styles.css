@@ -6,6 +6,43 @@
   gap: 8px;
 }
 
+.ai-chat-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px;
+}
+
+.ai-chat-header-left { flex: 1; min-width: 0; }
+.ai-chat-header-right { display: flex; gap: 6px; }
+
+.ai-chat-session-picker {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  color: var(--text-normal);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ai-chat-session-picker:hover { background: var(--background-modifier-hover); }
+.ai-chat-session-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+.ai-chat-session-caret { color: var(--text-muted); font-size: 11px; }
+
+.ai-chat-icon-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
 .ai-chat-messages {
   flex: 1;
   overflow-y: auto;
@@ -37,12 +74,67 @@
   color: var(--text-error);
 }
 
+.ai-chat-msg-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.ai-chat-msg-header .ai-chat-role { margin-bottom: 0; }
+
 .ai-chat-role {
   font-weight: 600;
   font-size: 11px;
   text-transform: uppercase;
   opacity: 0.6;
   margin-bottom: 4px;
+}
+
+.ai-chat-copy-btn {
+  margin-left: auto;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 6px;
+  background: transparent;
+  border: 1px solid var(--background-modifier-border);
+  color: var(--text-muted);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.ai-chat-msg:hover .ai-chat-copy-btn { opacity: 1; }
+.ai-chat-copy-btn:hover { color: var(--text-normal); border-color: var(--text-muted); }
+
+/* System prompt modal */
+.ai-system-prompt-modal { width: min(900px, 90vw); }
+.ai-system-prompt-textarea {
+  width: 100%;
+  min-height: 320px;
+  font-family: var(--font-monospace);
+  font-size: 13px;
+  padding: 8px;
+  resize: vertical;
+}
+.ai-system-prompt-buttons {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  align-items: center;
+}
+
+.ai-system-prompt-preview {
+  margin: 4px 0 8px 0;
+  padding: 6px 8px;
+  background: var(--background-secondary);
+  border-radius: 4px;
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 80px;
+  overflow: hidden;
 }
 
 .ai-chat-content p:first-child { margin-top: 0; }

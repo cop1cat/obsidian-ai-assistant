@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] — 2026-05-20
+
+### Fixed
+- Messages no longer get clipped and the chat pane scrolls correctly. The 0.3.4 width fix added `overflow: hidden` to `.ai-chat-msg`, which clipped tall content and broke vertical scrolling; replaced with `flex-shrink: 0` so bubbles take their natural height while still being bounded width-wise.
+- User message bubbles now show their full rounded corners again (overflow clipping was hiding part of the radius under the accent border-left).
+
+### Changed
+- Active session in the chat list is now a rounded block (6px radius, 6px side margins, inset accent border) instead of an edge-to-edge rectangle with a 2px left bar. Hover keeps the simple fill; active adds the accent outline.
+
 ## [0.3.4] — 2026-05-20
 
 ### Added

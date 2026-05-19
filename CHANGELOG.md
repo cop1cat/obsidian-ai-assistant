@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-05-20
+
+### Changed
+- **Breaking — memory storage moved out of the vault.** The assistant's persistent memory now lives inside the plugin's `data.json` (alongside settings and sessions) rather than in a `_AI/memory.md` note. The `memoryNotePath` setting is gone; a new `memoryText` (plus `memoryUpdatedAt`) field holds the contents. Settings tab gains a full-width textarea editor with Clear / Copy and a "last updated" timestamp. Existing `_AI/memory.md` content is not auto-migrated — copy it into Settings → Memory once if you want to keep it.
+- `read_memory` / `write_memory` / `append_memory` rewritten to read and write `settings.memoryText` directly and persist via a new `saveSettings` callback exposed on `ToolContext`.
+- Chat view restructured around two modes: **list mode** (full-height sessions list, default) and **chat mode** (header with ✕ back-button, current session title, ⋯ rename/delete menu, messages and composer). Clicking a session row enters chat mode; ✕ returns to the list. Replaces the previous always-visible sessions sidebar at the top of the chat view.
+- "Extra body (JSON)" rebuilt as a dedicated full-width editor (monospace textarea, vertical resize, `white-space: pre`) with a live status line — `empty` / `valid JSON` / `invalid JSON: <error>` updated on every keystroke. Replaces the cramped `Setting` row.
+
+### Fixed
+- Composer no longer renders a "double purple border": added internal padding to `.ai-composer`, suppressed textarea focus outline/box-shadow with `!important`, and tightened context-chip / button-bar padding so the file-path chip no longer touches the container border.
+- Message bubbles now have symmetric top/bottom padding: `.ai-chat-msg` switched to a flex column with `gap`, header and content margins zeroed out, so the gap above "You/Assistant" matches the gap below the last line.
+- Removed the per-row ⋯ button from session rows (right-click menu still works), cutting down on hover transitions and re-renders that made the menu feel laggy.
+
 ## [0.2.1] — 2026-05-19
 
 ### Added

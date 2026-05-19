@@ -1,37 +1,12 @@
-import { TFile, TFolder } from "obsidian";
-import { dirname, safePath } from "../utils/paths";
-import { ToolDefinition, ToolError, requireString } from "./types";
+import { ToolDefinition, requireString } from "./types";
 
-async function ensureMemoryFile(
-  app: import("obsidian").App,
-  path: string,
-  initial = "",
-): Promise<TFile> {
-  const existing = app.vault.getAbstractFileByPath(path);
-  if (existing instanceof TFile) return existing;
-  if (existing) {
-    throw new ToolError(`Memory path exists and is not a file: ${path}`);
-  }
-  const parent = dirname(path);
-  if (parent) {
-    const parentItem = app.vault.getAbstractFileByPath(parent);
-    if (!parentItem) {
-      await app.vault.createFolder(parent);
-    } else if (!(parentItem instanceof TFolder)) {
-      throw new ToolError(`Memory parent is not a folder: ${parent}`);
-    }
-  }
-  return app.vault.create(path, initial);
-}
-
-function memoryPath(settings: { memoryNotePath: string }): string {
-  const p = settings.memoryNotePath?.trim();
-  if (!p) {
-    throw new ToolError(
-      "Memory is disabled. Set 'Memory note path' in AI Assistant settings to enable.",
-    );
-  }
-  return safePath(p);
+async function persist(
+  ctx: { settings: { memoryText: string; memoryUpdatedAt: number }; saveSettings: () => Promise<void> },
+  next: string,
+): Promise<void> {
+  ctx.settings.memoryText = next;
+  ctx.settings.memoryUpdatedAt = Date.now();
+  await ctx.saveSettings();
 }
 
 export const read_memory: ToolDefinition = {
@@ -40,18 +15,12 @@ export const read_memory: ToolDefinition = {
     function: {
       name: "read_memory",
       description:
-        "Read the assistant's persistent memory note for this vault. Returns the full contents, or an empty string if the note doesn't exist yet. Use at the start of a conversation to recall what you previously learned about this vault.",
+        "Read the assistant's persistent memory (stored inside the plugin's settings, not in the vault). Returns the full contents, or an empty string if nothing has been recorded yet. Use at the start of a conversation to recall what you previously learned about this vault.",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
-  async execute(_args, { app, settings }) {
-    const path = memoryPath(settings);
-    const file = app.vault.getAbstractFileByPath(path);
-    if (!file) return "";
-    if (!(file instanceof TFile)) {
-      throw new ToolError(`Memory path is not a file: ${path}`);
-    }
-    return app.vault.cachedRead(file);
+  async execute(_args, { settings }) {
+    return settings.memoryText ?? "";
   },
 };
 
@@ -61,22 +30,20 @@ export const write_memory: ToolDefinition = {
     function: {
       name: "write_memory",
       description:
-        "Overwrite the assistant's memory note with new content. Creates the note (and any parent folders) if missing. Use to record durable facts about the vault: folder conventions, naming patterns, recurring topics, important MOCs/index notes, user preferences.",
+        "Overwrite the assistant's memory with new content. Stored inside the plugin's settings (data.json), not in the vault. Use to record durable facts about the vault: folder conventions, naming patterns, recurring topics, important MOCs/index notes, user preferences.",
       parameters: {
         type: "object",
         properties: {
-          content: { type: "string", description: "Full new content of the memory note." },
+          content: { type: "string", description: "Full new content of the memory." },
         },
         required: ["content"],
       },
     },
   },
-  async execute(args, { app, settings }) {
-    const path = memoryPath(settings);
+  async execute(args, ctx) {
     const content = requireString(args, "content");
-    const file = await ensureMemoryFile(app, path, "");
-    await app.vault.modify(file, content);
-    return `Wrote memory (${content.length} chars) to ${path}.`;
+    await persist(ctx, content);
+    return `Wrote memory (${content.length} chars).`;
   },
 };
 
@@ -86,23 +53,21 @@ export const append_memory: ToolDefinition = {
     function: {
       name: "append_memory",
       description:
-        "Append text to the assistant's memory note (creating it if missing). Prefer this over write_memory for incremental additions so previously recorded facts are preserved.",
+        "Append text to the assistant's memory (creating it if empty). Prefer this over write_memory for incremental additions so previously recorded facts are preserved.",
       parameters: {
         type: "object",
         properties: {
-          text: { type: "string", description: "Text to append (a leading newline is added automatically if the file is non-empty)." },
+          text: { type: "string", description: "Text to append (a leading newline is added automatically if memory is non-empty)." },
         },
         required: ["text"],
       },
     },
   },
-  async execute(args, { app, settings }) {
-    const path = memoryPath(settings);
+  async execute(args, ctx) {
     const text = requireString(args, "text");
-    const file = await ensureMemoryFile(app, path, "");
-    const existing = await app.vault.read(file);
+    const existing = ctx.settings.memoryText ?? "";
     const sep = existing && !existing.endsWith("\n") ? "\n" : "";
-    await app.vault.modify(file, existing + sep + text);
-    return `Appended ${text.length} chars to ${path}.`;
+    await persist(ctx, existing + sep + text);
+    return `Appended ${text.length} chars to memory.`;
   },
 };

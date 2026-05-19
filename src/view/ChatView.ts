@@ -47,20 +47,22 @@ export class ChatView extends ItemView {
     this.plugin.scheduleChatSave();
   }
 
-  private sessionsHeaderEl!: HTMLElement;
-  private sessionsListEl!: HTMLElement;
-  private messagesEl!: HTMLElement;
-  private composerEl!: HTMLElement;
-  private contextBarEl!: HTMLElement;
-  private inputEl!: HTMLTextAreaElement;
-  private sendBtn!: HTMLButtonElement;
-  private stopBtn!: HTMLButtonElement;
-  private emptyHintEl!: HTMLElement;
+  private rootEl!: HTMLElement;
+  private headerEl!: HTMLElement;
+  private bodyEl!: HTMLElement;
+  private sessionsListEl: HTMLElement | null = null;
+  private messagesEl: HTMLElement | null = null;
+  private composerEl: HTMLElement | null = null;
+  private contextBarEl: HTMLElement | null = null;
+  private inputEl: HTMLTextAreaElement | null = null;
+  private sendBtn: HTMLButtonElement | null = null;
+  private stopBtn: HTMLButtonElement | null = null;
+  private emptyHintEl: HTMLElement | null = null;
 
   private abortController: AbortController | null = null;
   private generating = false;
   private detachSessions: (() => void) | null = null;
-  private sessionsOpen = true;
+  private mode: "list" | "chat" = "list";
 
   // Per-view input history (in-memory only).
   private inputHistory: string[] = [];
@@ -89,21 +91,149 @@ export class ChatView extends ItemView {
     const root = this.contentEl;
     root.empty();
     root.addClass("ai-chat-view");
+    this.rootEl = root;
 
-    // --- Sessions panel ---
-    const sessionsWrap = root.createDiv({ cls: "ai-sessions" });
-    this.sessionsHeaderEl = sessionsWrap.createDiv({ cls: "ai-sessions-header" });
-    this.sessionsListEl = sessionsWrap.createDiv({ cls: "ai-sessions-list" });
-    this.renderSessionsHeader();
-    this.renderSessionsList();
+    this.headerEl = root.createDiv({ cls: "ai-chat-header" });
+    this.bodyEl = root.createDiv({ cls: "ai-chat-body" });
 
-    // --- Messages ---
-    this.messagesEl = root.createDiv({ cls: "ai-chat-messages" });
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.updateContextBar()));
+    this.registerEvent(this.app.workspace.on("file-open", () => this.updateContextBar()));
+    this.detachSessions = this.plugin.onSessionsChange(() => {
+      if (this.mode === "list") {
+        this.renderSessionsList();
+      } else {
+        this.renderHeader();
+        this.renderActiveSessionMessages();
+        this.updateEmptyState();
+      }
+    });
 
-    // --- Composer ---
-    this.composerEl = root.createDiv({ cls: "ai-composer" });
+    this.render();
+  }
+
+  private render(): void {
+    this.renderHeader();
+    this.renderBody();
+  }
+
+  private setMode(m: "list" | "chat"): void {
+    if (this.mode === m) return;
+    this.mode = m;
+    this.render();
+    if (m === "chat") {
+      // Defer focus until the textarea is in the DOM.
+      requestAnimationFrame(() => this.inputEl?.focus());
+    }
+  }
+
+  async onClose(): Promise<void> {
+    this.stop();
+    this.detachSessions?.();
+    this.detachSessions = null;
+    this.messageElements.clear();
+  }
+
+  // -- Header --
+
+  private renderHeader(): void {
+    const h = this.headerEl;
+    h.empty();
+    h.toggleClass("is-list", this.mode === "list");
+    h.toggleClass("is-chat", this.mode === "chat");
+
+    const left = h.createDiv({ cls: "ai-chat-header-left" });
+    const right = h.createDiv({ cls: "ai-chat-header-right" });
+
+    if (this.mode === "list") {
+      left.createSpan({ cls: "ai-chat-header-title", text: "Chats" });
+      left.createSpan({ cls: "ai-chat-header-count", text: `${this.plugin.sessions.length}` });
+
+      const newBtn = right.createEl("button", { cls: "ai-chat-header-btn" });
+      newBtn.setAttr("aria-label", "New chat");
+      newBtn.title = "New chat";
+      setIcon(newBtn, "plus");
+      newBtn.onclick = () => {
+        const empty = this.plugin.sessions.find(
+          (s) => s.uiMessages.length === 0 && s.history.length === 0,
+        );
+        if (empty) {
+          this.plugin.switchSession(empty.id);
+        } else {
+          this.stop();
+          this.plugin.createSession();
+        }
+        this.setMode("chat");
+      };
+
+      const settingsBtn = right.createEl("button", { cls: "ai-chat-header-btn" });
+      settingsBtn.setAttr("aria-label", "Plugin settings");
+      settingsBtn.title = "Plugin settings";
+      setIcon(settingsBtn, "settings");
+      settingsBtn.onclick = () => this.openPluginSettings();
+    } else {
+      const back = left.createEl("button", { cls: "ai-chat-header-btn ai-chat-header-back" });
+      back.setAttr("aria-label", "Back to chats");
+      back.title = "Back to chats";
+      setIcon(back, "x");
+      back.onclick = () => this.setMode("list");
+
+      const s = this.session();
+      const title = left.createSpan({ cls: "ai-chat-header-title is-chat-title" });
+      title.setText(s.title || "Untitled");
+      title.title = s.title || "Untitled";
+
+      const more = right.createEl("button", { cls: "ai-chat-header-btn" });
+      more.setAttr("aria-label", "Chat options");
+      more.title = "Chat options";
+      setIcon(more, "more-horizontal");
+      more.onclick = (e) => {
+        e.stopPropagation();
+        this.openSessionMenu(e, s);
+      };
+    }
+  }
+
+  private openPluginSettings(): void {
+    const obsApp = this.app as unknown as {
+      setting?: { open: () => void; openTabById: (id: string) => void };
+    };
+    obsApp.setting?.open?.();
+    obsApp.setting?.openTabById?.(this.plugin.manifest.id);
+  }
+
+  // -- Body --
+
+  private renderBody(): void {
+    const body = this.bodyEl;
+    body.empty();
+    body.toggleClass("is-list", this.mode === "list");
+    body.toggleClass("is-chat", this.mode === "chat");
+
+    this.sessionsListEl = null;
+    this.messagesEl = null;
+    this.composerEl = null;
+    this.contextBarEl = null;
+    this.inputEl = null;
+    this.sendBtn = null;
+    this.stopBtn = null;
+    this.emptyHintEl = null;
+    this.messageElements.clear();
+
+    if (this.mode === "list") {
+      this.sessionsListEl = body.createDiv({ cls: "ai-sessions-list" });
+      this.renderSessionsList();
+    } else {
+      this.messagesEl = body.createDiv({ cls: "ai-chat-messages" });
+      this.buildComposer(body);
+      this.renderActiveSessionMessages();
+      this.updateEmptyState();
+      this.updateContextBar();
+    }
+  }
+
+  private buildComposer(parent: HTMLElement): void {
+    this.composerEl = parent.createDiv({ cls: "ai-composer" });
     this.contextBarEl = this.composerEl.createDiv({ cls: "ai-composer-context" });
-    this.updateContextBar();
 
     this.inputEl = this.composerEl.createEl("textarea", { cls: "ai-composer-input" });
     this.inputEl.placeholder = "Message AI Assistant…  (Enter to send · Shift+Enter newline · ↑/↓ history)";
@@ -119,12 +249,7 @@ export class ChatView extends ItemView {
     const modelChip = composerLeft.createSpan({ cls: "ai-composer-model" });
     modelChip.setText(this.plugin.settings.model || "no model set");
     modelChip.title = "Configured model (change in settings).";
-    modelChip.onclick = () => {
-      // Quick path to settings.
-      const obsApp = this.app as unknown as { setting?: { open: () => void; openTabById: (id: string) => void } };
-      obsApp.setting?.open?.();
-      obsApp.setting?.openTabById?.(this.plugin.manifest.id);
-    };
+    modelChip.onclick = () => this.openPluginSettings();
 
     const composerRight = composerBar.createDiv({ cls: "ai-composer-right" });
 
@@ -132,89 +257,32 @@ export class ChatView extends ItemView {
     this.stopBtn.setAttr("aria-label", "Stop");
     this.stopBtn.title = "Stop";
     setIcon(this.stopBtn, "square");
-    this.stopBtn.disabled = true;
+    this.stopBtn.disabled = !this.generating;
     this.stopBtn.onclick = () => this.stop();
 
     this.sendBtn = composerRight.createEl("button", { cls: "ai-composer-btn ai-composer-send mod-cta" });
     this.sendBtn.setAttr("aria-label", "Send");
     this.sendBtn.title = "Send (Enter)";
     setIcon(this.sendBtn, "arrow-up");
+    this.sendBtn.disabled = this.generating;
     this.sendBtn.onclick = () => this.send();
 
-    // --- Workspace listeners ---
-    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.updateContextBar()));
-    this.registerEvent(this.app.workspace.on("file-open", () => this.updateContextBar()));
-    this.detachSessions = this.plugin.onSessionsChange(() => {
-      this.renderSessionsHeader();
-      this.renderSessionsList();
-      this.renderActiveSessionMessages();
-      this.updateEmptyState();
-    });
-
-    this.renderActiveSessionMessages();
-    this.updateEmptyState();
-  }
-
-  async onClose(): Promise<void> {
-    this.stop();
-    this.detachSessions?.();
-    this.detachSessions = null;
-    this.messageElements.clear();
-  }
-
-  // -- Sessions panel --
-
-  private renderSessionsHeader(): void {
-    const h = this.sessionsHeaderEl;
-    h.empty();
-
-    const left = h.createDiv({ cls: "ai-sessions-header-left" });
-    const toggle = left.createEl("button", { cls: "ai-sessions-toggle" });
-    toggle.setAttr("aria-label", "Toggle sessions");
-    setIcon(toggle, this.sessionsOpen ? "chevron-down" : "chevron-right");
-    toggle.onclick = () => {
-      this.sessionsOpen = !this.sessionsOpen;
-      this.sessionsListEl.toggleClass("is-collapsed", !this.sessionsOpen);
-      this.renderSessionsHeader();
-    };
-    left.createSpan({ cls: "ai-sessions-label", text: "SESSIONS" });
-    left.createSpan({ cls: "ai-sessions-count", text: `(${this.plugin.sessions.length})` });
-
-    const right = h.createDiv({ cls: "ai-sessions-header-right" });
-    const newBtn = right.createEl("button", { cls: "ai-sessions-icon-btn" });
-    newBtn.setAttr("aria-label", "New chat");
-    newBtn.title = "New chat";
-    setIcon(newBtn, "plus");
-    newBtn.onclick = () => {
-      const cur = this.session();
-      if (cur.uiMessages.length === 0 && cur.history.length === 0) {
-        this.inputEl?.focus();
-        new Notice("Already in an empty chat.");
-        return;
-      }
-      this.stop();
-      this.plugin.createSession();
-    };
-
-    const settingsBtn = right.createEl("button", { cls: "ai-sessions-icon-btn" });
-    settingsBtn.setAttr("aria-label", "Plugin settings");
-    settingsBtn.title = "Plugin settings";
-    setIcon(settingsBtn, "settings");
-    settingsBtn.onclick = () => {
-      const obsApp = this.app as unknown as { setting?: { open: () => void; openTabById: (id: string) => void } };
-      obsApp.setting?.open?.();
-      obsApp.setting?.openTabById?.(this.plugin.manifest.id);
-    };
+    this.composerEl.toggleClass("is-generating", this.generating);
   }
 
   private renderSessionsList(): void {
     const list = this.sessionsListEl;
+    if (!list) return;
     list.empty();
-    list.toggleClass("is-collapsed", !this.sessionsOpen);
 
     const activeId = this.session().id;
-    // Most recent first.
     const sorted = [...this.plugin.sessions].sort((a, b) => b.updatedAt - a.updatedAt);
+
+    if (sorted.length === 0) {
+      list.createDiv({ cls: "ai-sessions-empty", text: "No chats yet — click + to start one." });
+      return;
+    }
+
     for (const s of sorted) {
       const row = list.createDiv({ cls: "ai-session-row" });
       if (s.id === activeId) row.addClass("is-active");
@@ -229,24 +297,15 @@ export class ChatView extends ItemView {
       const msgs = s.uiMessages.length;
       meta.setText(`${msgs} msg${msgs === 1 ? "" : "s"} · ${formatRelative(s.updatedAt)}`);
 
-      row.onclick = (e) => {
-        if ((e.target as HTMLElement).closest(".ai-session-row-actions")) return;
+      row.onclick = () => {
         if (s.id !== activeId) {
           this.stop();
           this.plugin.switchSession(s.id);
         }
+        this.setMode("chat");
       };
       row.oncontextmenu = (e) => {
         e.preventDefault();
-        this.openSessionMenu(e, s);
-      };
-
-      const actions = row.createDiv({ cls: "ai-session-row-actions" });
-      const more = actions.createEl("button", { cls: "ai-session-action" });
-      more.setAttr("aria-label", "Session options");
-      setIcon(more, "more-horizontal");
-      more.onclick = (e) => {
-        e.stopPropagation();
         this.openSessionMenu(e, s);
       };
     }
@@ -254,10 +313,13 @@ export class ChatView extends ItemView {
 
   private openSessionMenu(evt: MouseEvent, s: ChatSession): void {
     const menu = new Menu();
-    menu.addItem((mi) => mi.setTitle("Switch to").setIcon("check").onClick(() => {
-      this.stop();
-      this.plugin.switchSession(s.id);
-    }));
+    if (this.mode === "list") {
+      menu.addItem((mi) => mi.setTitle("Open").setIcon("check").onClick(() => {
+        this.stop();
+        this.plugin.switchSession(s.id);
+        this.setMode("chat");
+      }));
+    }
     menu.addItem((mi) =>
       mi.setTitle("Rename…").setIcon("pencil").onClick(() => {
         const next = window.prompt("Rename chat", s.title);
@@ -272,17 +334,21 @@ export class ChatView extends ItemView {
         .setIcon("trash")
         .onClick(() => {
           if (!window.confirm(`Delete chat "${s.title}"? This cannot be undone.`)) return;
-          if (s.id === this.session().id) this.stop();
+          const wasActive = s.id === this.session().id;
+          if (wasActive) this.stop();
           this.plugin.deleteSession(s.id);
+          if (wasActive && this.mode === "chat") this.setMode("list");
         }),
     );
     menu.showAtMouseEvent(evt);
   }
 
   private renderActiveSessionMessages(): void {
-    if (!this.messagesEl) return;
-    this.messagesEl.empty();
+    const messagesEl = this.messagesEl;
+    if (!messagesEl) return;
+    messagesEl.empty();
     this.messageElements.clear();
+    this.emptyHintEl = null;
     for (const msg of this.uiMessages) {
       if (msg.streaming) msg.streaming = false;
       this.renderMessage(msg);
@@ -290,15 +356,18 @@ export class ChatView extends ItemView {
   }
 
   private updateEmptyState(): void {
-    if (!this.messagesEl) return;
+    const messagesEl = this.messagesEl;
+    if (!messagesEl) return;
     if (this.uiMessages.length === 0) {
-      if (!this.emptyHintEl || !this.emptyHintEl.isConnected) {
-        this.emptyHintEl = this.messagesEl.createDiv({ cls: "ai-chat-empty" });
+      let hint = this.emptyHintEl;
+      if (!hint || !hint.isConnected) {
+        hint = messagesEl.createDiv({ cls: "ai-chat-empty" });
+        this.emptyHintEl = hint;
       } else {
-        this.emptyHintEl.empty();
+        hint.empty();
       }
-      this.emptyHintEl.createDiv({ cls: "ai-chat-empty-title", text: "Start a new conversation" });
-      this.emptyHintEl.createDiv({
+      hint.createDiv({ cls: "ai-chat-empty-title", text: "Start a new conversation" });
+      hint.createDiv({
         cls: "ai-chat-empty-sub",
         text:
           "Ask about your vault. The model can list, read, search, write and move notes via tools. " +
@@ -306,6 +375,7 @@ export class ChatView extends ItemView {
       });
     } else if (this.emptyHintEl?.isConnected) {
       this.emptyHintEl.remove();
+      this.emptyHintEl = null;
     }
   }
 
@@ -313,6 +383,7 @@ export class ChatView extends ItemView {
 
   private autoGrowInput(): void {
     const ta = this.inputEl;
+    if (!ta) return;
     ta.style.height = "auto";
     ta.style.height = Math.min(ta.scrollHeight, 240) + "px";
   }
@@ -343,6 +414,7 @@ export class ChatView extends ItemView {
     if (!this.inputHistory.length) return false;
     if (this.inputHistoryIdx !== null) return this.inputHistoryIdx > 0;
     const ta = this.inputEl;
+    if (!ta) return false;
     if (ta.value.length === 0) return true;
     return ta.selectionStart === 0 && ta.selectionEnd === 0 && !ta.value.slice(0, ta.selectionStart).includes("\n");
   }
@@ -352,32 +424,36 @@ export class ChatView extends ItemView {
   }
 
   private recallBack(): void {
+    const ta = this.inputEl;
+    if (!ta) return;
     if (this.inputHistoryIdx === null) {
-      this.inputDraft = this.inputEl.value;
+      this.inputDraft = ta.value;
       this.inputHistoryIdx = this.inputHistory.length - 1;
     } else {
       this.inputHistoryIdx = Math.max(0, this.inputHistoryIdx - 1);
     }
     const v = this.inputHistory[this.inputHistoryIdx];
-    this.inputEl.value = v;
-    this.inputEl.setSelectionRange(v.length, v.length);
+    ta.value = v;
+    ta.setSelectionRange(v.length, v.length);
     this.autoGrowInput();
   }
 
   private recallForward(): void {
+    const ta = this.inputEl;
+    if (!ta) return;
     if (this.inputHistoryIdx === null) return;
     if (this.inputHistoryIdx >= this.inputHistory.length - 1) {
       this.inputHistoryIdx = null;
-      this.inputEl.value = this.inputDraft;
+      ta.value = this.inputDraft;
       const len = this.inputDraft.length;
-      this.inputEl.setSelectionRange(len, len);
+      ta.setSelectionRange(len, len);
       this.autoGrowInput();
       return;
     }
     this.inputHistoryIdx += 1;
     const v = this.inputHistory[this.inputHistoryIdx];
-    this.inputEl.value = v;
-    this.inputEl.setSelectionRange(v.length, v.length);
+    ta.value = v;
+    ta.setSelectionRange(v.length, v.length);
     this.autoGrowInput();
   }
 
@@ -423,9 +499,9 @@ export class ChatView extends ItemView {
 
   private setGenerating(on: boolean): void {
     this.generating = on;
-    this.sendBtn.disabled = on;
-    this.stopBtn.disabled = !on;
-    this.composerEl.toggleClass("is-generating", on);
+    if (this.sendBtn) this.sendBtn.disabled = on;
+    if (this.stopBtn) this.stopBtn.disabled = !on;
+    this.composerEl?.toggleClass("is-generating", on);
   }
 
   private async activeNoteHint(): Promise<string | null> {
@@ -445,20 +521,12 @@ export class ChatView extends ItemView {
   }
 
   private async memoryHint(): Promise<string | null> {
-    const path = this.plugin.settings.memoryNotePath?.trim();
-    if (!path) return null;
     if (!this.plugin.settings.includeMemoryInContext) return null;
-    const file = this.app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof TFile)) return null;
-    try {
-      const content = await this.app.vault.cachedRead(file);
-      const trimmed = content.trim();
-      if (!trimmed) return null;
-      const mtime = file.stat?.mtime ? new Date(file.stat.mtime).toISOString() : "unknown";
-      return `# Persistent memory (from ${path})\nLast modified: ${mtime}\nThis is what you previously recorded about this vault. Trust it as up-to-date unless you find conflicting evidence in the vault — in which case update the memory note via write_memory or append_memory.\n\n${trimmed}`;
-    } catch {
-      return null;
-    }
+    const trimmed = (this.plugin.settings.memoryText ?? "").trim();
+    if (!trimmed) return null;
+    const ts = this.plugin.settings.memoryUpdatedAt;
+    const stamp = ts ? new Date(ts).toISOString() : "unknown";
+    return `# Persistent memory (plugin-internal)\nLast updated: ${stamp}\nThis is what you previously recorded about this vault. Trust it as up-to-date unless you find conflicting evidence in the vault — in which case update via write_memory or append_memory.\n\n${trimmed}`;
   }
 
   /** Always-on temporal block so the model can reason about recency:
@@ -468,14 +536,11 @@ export class ChatView extends ItemView {
     const now = new Date();
     const lines: string[] = ["# Now", `Local time: ${now.toString()}`, `ISO: ${now.toISOString()}`];
 
-    const memPath = this.plugin.settings.memoryNotePath?.trim();
-    if (memPath) {
-      const file = this.app.vault.getAbstractFileByPath(memPath);
-      if (file instanceof TFile && file.stat?.mtime) {
-        lines.push(`Memory note last modified: ${new Date(file.stat.mtime).toISOString()} (${memPath})`);
-      } else {
-        lines.push(`Memory note (${memPath}): not created yet.`);
-      }
+    const memTs = this.plugin.settings.memoryUpdatedAt;
+    if (memTs) {
+      lines.push(`Memory last updated: ${new Date(memTs).toISOString()}`);
+    } else {
+      lines.push(`Memory: empty (never written).`);
     }
 
     // Estimate "time since previous user turn" from session uiMessages — the prior
@@ -497,13 +562,15 @@ export class ChatView extends ItemView {
   }
 
   private renderMessage(msg: UiMessage): void {
+    const messagesEl = this.messagesEl;
+    if (!messagesEl) return;
     let el = this.messageElements.get(msg.id);
     if (!el) {
-      el = this.messagesEl.createDiv();
+      el = messagesEl.createDiv();
       this.messageElements.set(msg.id, el);
     }
     this.renderer.render(el, msg);
-    this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+    messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
   private getUi(id: string): UiMessage | undefined {
@@ -512,7 +579,9 @@ export class ChatView extends ItemView {
 
   private async send(): Promise<void> {
     if (this.generating) return;
-    const text = this.inputEl.value.trim();
+    const ta = this.inputEl;
+    if (!ta) return;
+    const text = ta.value.trim();
     if (!text) return;
     if (!this.plugin.settings.model) {
       new Notice("AI Assistant: model is not configured. Open settings.");
@@ -520,7 +589,7 @@ export class ChatView extends ItemView {
     }
 
     this.pushInputHistory(text);
-    this.inputEl.value = "";
+    ta.value = "";
     this.autoGrowInput();
 
     const userUi: UiMessage = {
@@ -531,7 +600,7 @@ export class ChatView extends ItemView {
     this.uiMessages.push(userUi);
     this.renderMessage(userUi);
     this.plugin.maybeAutoTitle(this.session());
-    this.renderSessionsList();
+    this.renderHeader();
     this.updateEmptyState();
     this.persist();
 
@@ -546,6 +615,7 @@ export class ChatView extends ItemView {
       (h) => {
         sessionAtStart.history = h;
       },
+      () => this.plugin.saveSettings(),
     );
 
     const [activeHint, memHint] = await Promise.all([this.activeNoteHint(), this.memoryHint()]);
@@ -631,6 +701,6 @@ export class ChatView extends ItemView {
 
     this.setGenerating(false);
     this.abortController = null;
-    this.renderSessionsList();
+    this.renderHeader();
   }
 }

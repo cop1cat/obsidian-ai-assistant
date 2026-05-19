@@ -24,6 +24,7 @@ export class Agent {
     private settings: PluginSettings,
     private getHistory: () => ChatMessage[],
     private setHistory: (h: ChatMessage[]) => void,
+    private saveSettings: () => Promise<void>,
   ) {
     this.client = new LLMClient(settings);
   }
@@ -147,7 +148,11 @@ export class Agent {
     }
 
     try {
-      const text = await def.execute(args, { app: this.app, settings: this.settings });
+      const text = await def.execute(args, {
+        app: this.app,
+        settings: this.settings,
+        saveSettings: this.saveSettings,
+      });
       return { ok: true, text };
     } catch (e) {
       const err = e as Error;

@@ -4,6 +4,7 @@ import type { PluginSettings } from "../settings";
 export interface ToolContext {
   app: App;
   settings: PluginSettings;
+  saveSettings: () => Promise<void>;
 }
 
 export interface ToolSchema {

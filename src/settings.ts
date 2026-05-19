@@ -7,7 +7,7 @@ export const DEFAULT_SYSTEM_PROMPT = `You are an AI assistant integrated into an
 Capabilities:
 - You can list, read, create, edit, append, delete, move, and rename markdown notes and folders via tool calls.
 - You can create folders, and you can inspect backlinks, outlinks, and tags.
-- You have a persistent memory note (path is configured in plugin settings). Use read_memory at the start of a turn to recall what you learned about this vault before, and write_memory / append_memory to record durable facts (folder conventions, naming patterns, MOC/index notes, recurring topics, user preferences).
+- You have a persistent memory store (lives inside the plugin's settings, not in the vault). Use read_memory at the start of a turn to recall what you learned about this vault before, and write_memory / append_memory to record durable facts (folder conventions, naming patterns, MOC/index notes, recurring topics, user preferences).
 
 Rules:
 - All file paths are RELATIVE to the vault root. Never use absolute paths or "..".
@@ -39,7 +39,11 @@ export interface PluginSettings {
   ripgrepPath: string;
   requireConfirmation: boolean;
   includeActiveNoteInContext: boolean;
-  memoryNotePath: string;
+  /** Persistent assistant memory stored inside plugin data (data.json).
+   *  Read/written by read_memory / write_memory / append_memory tools. */
+  memoryText: string;
+  /** Timestamp (ms) of the last memory write. 0 = never written. */
+  memoryUpdatedAt: number;
   includeMemoryInContext: boolean;
   /** Free-form JSON merged into each chat-completion request body.
    *  Empty string = no extras. Stored as text so users can author it
@@ -62,7 +66,8 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   ripgrepPath: "",
   requireConfirmation: false,
   includeActiveNoteInContext: true,
-  memoryNotePath: "_AI/memory.md",
+  memoryText: "",
+  memoryUpdatedAt: 0,
   includeMemoryInContext: true,
   extraBody: "",
 };
@@ -105,7 +110,8 @@ export function validateSettings(raw: unknown): PluginSettings {
     ripgrepPath: str("ripgrepPath", defaults.ripgrepPath),
     requireConfirmation: bool("requireConfirmation", defaults.requireConfirmation),
     includeActiveNoteInContext: bool("includeActiveNoteInContext", defaults.includeActiveNoteInContext),
-    memoryNotePath: str("memoryNotePath", defaults.memoryNotePath),
+    memoryText: str("memoryText", defaults.memoryText),
+    memoryUpdatedAt: num("memoryUpdatedAt", defaults.memoryUpdatedAt),
     includeMemoryInContext: bool("includeMemoryInContext", defaults.includeMemoryInContext),
     extraBody: str("extraBody", defaults.extraBody),
   };
@@ -314,31 +320,59 @@ export class AIAssistantSettingTab extends PluginSettingTab {
     containerEl.createEl("p", {
       cls: "setting-item-description",
       text:
-        "A markdown note inside the vault that the assistant can read and write via the read_memory / write_memory / append_memory tools. Its current contents are also injected into the system prompt when enabled, so the model recalls vault facts across sessions.",
+        "Persistent notes the assistant keeps about your vault. Stored inside the plugin (data.json) — not as a vault file. Editable here; the model reads/writes it via the read_memory / write_memory / append_memory tools and (optionally) sees it on every turn.",
     });
 
     new Setting(containerEl)
-      .setName("Memory note path")
-      .setDesc("Relative to vault root. Leave empty to disable memory tools and context injection.")
-      .addText((t) =>
-        t
-          .setPlaceholder("_AI/memory.md")
-          .setValue(this.plugin.settings.memoryNotePath)
-          .onChange(async (v) => {
-            this.plugin.settings.memoryNotePath = v.trim();
-            await this.plugin.saveSettings();
-          }),
-      );
-
-    new Setting(containerEl)
       .setName("Inject memory into system prompt")
-      .setDesc("Prepend the memory note's content to the system message on every turn.")
+      .setDesc("Prepend the memory contents to the system message on every turn.")
       .addToggle((tg) =>
         tg.setValue(this.plugin.settings.includeMemoryInContext).onChange(async (v) => {
           this.plugin.settings.includeMemoryInContext = v;
           await this.plugin.saveSettings();
         }),
       );
+
+    const memSetting = new Setting(containerEl).setName("Memory contents");
+    const updated = this.plugin.settings.memoryUpdatedAt;
+    memSetting.setDesc(
+      updated
+        ? `Last updated: ${new Date(updated).toLocaleString()}`
+        : "Empty — the assistant hasn't recorded anything yet.",
+    );
+    memSetting.settingEl.addClass("ai-memory-setting");
+
+    const memWrap = containerEl.createDiv({ cls: "ai-memory-editor" });
+    const memTa = memWrap.createEl("textarea", { cls: "ai-memory-textarea" });
+    memTa.rows = 14;
+    memTa.placeholder = "(empty — will be populated by the assistant)";
+    memTa.value = this.plugin.settings.memoryText;
+    memTa.addEventListener("input", async () => {
+      this.plugin.settings.memoryText = memTa.value;
+      this.plugin.settings.memoryUpdatedAt = Date.now();
+      await this.plugin.saveSettings();
+    });
+
+    const memBtns = memWrap.createDiv({ cls: "ai-memory-buttons" });
+    const clearBtn = memBtns.createEl("button", { text: "Clear" });
+    clearBtn.onclick = async () => {
+      if (!window.confirm("Clear all memory? This cannot be undone.")) return;
+      this.plugin.settings.memoryText = "";
+      this.plugin.settings.memoryUpdatedAt = Date.now();
+      memTa.value = "";
+      await this.plugin.saveSettings();
+      this.display();
+    };
+    const copyMemBtn = memBtns.createEl("button", { text: "Copy" });
+    copyMemBtn.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(memTa.value);
+        copyMemBtn.setText("Copied");
+        window.setTimeout(() => copyMemBtn.setText("Copy"), 1200);
+      } catch {
+        new Notice("Could not copy to clipboard.");
+      }
+    };
 
     containerEl.createEl("h2", { text: "Extra request params" });
     containerEl.createEl("p", {
@@ -349,18 +383,38 @@ export class AIAssistantSettingTab extends PluginSettingTab {
         "{\"reasoning_effort\":\"minimal\"} (OpenAI o-series). Invalid JSON is ignored with a console warning.",
     });
 
-    new Setting(containerEl)
-      .setName("Extra body (JSON)")
-      .addTextArea((t) => {
-        t.setValue(this.plugin.settings.extraBody).onChange(async (v) => {
-          this.plugin.settings.extraBody = v;
-          await this.plugin.saveSettings();
-        });
-        t.inputEl.rows = 5;
-        t.inputEl.style.width = "100%";
-        t.inputEl.style.fontFamily = "var(--font-monospace)";
-        t.inputEl.placeholder = '{"chat_template_kwargs":{"enable_thinking":false}}';
-      });
+    new Setting(containerEl).setName("Extra body (JSON)").setHeading();
+    const extraWrap = containerEl.createDiv({ cls: "ai-json-editor" });
+    const extraTa = extraWrap.createEl("textarea", { cls: "ai-json-textarea" });
+    extraTa.rows = 6;
+    extraTa.placeholder = '{"chat_template_kwargs":{"enable_thinking":false}}';
+    extraTa.value = this.plugin.settings.extraBody;
+    const extraStatus = extraWrap.createDiv({ cls: "ai-json-status" });
+    const updateExtraStatus = (v: string) => {
+      const s = v.trim();
+      if (!s) {
+        extraStatus.setText("empty — no extras sent");
+        extraStatus.removeClass("is-error");
+        extraStatus.removeClass("is-ok");
+        return;
+      }
+      try {
+        JSON.parse(s);
+        extraStatus.setText("valid JSON");
+        extraStatus.addClass("is-ok");
+        extraStatus.removeClass("is-error");
+      } catch (e) {
+        extraStatus.setText(`invalid JSON: ${(e as Error).message}`);
+        extraStatus.addClass("is-error");
+        extraStatus.removeClass("is-ok");
+      }
+    };
+    updateExtraStatus(extraTa.value);
+    extraTa.addEventListener("input", async () => {
+      this.plugin.settings.extraBody = extraTa.value;
+      updateExtraStatus(extraTa.value);
+      await this.plugin.saveSettings();
+    });
 
     containerEl.createEl("h2", { text: "Tools" });
     containerEl.createEl("p", {

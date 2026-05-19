@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Node / Obsidian plugin
+node_modules/
+main.js
+main.js.map
+data.json
+*.log
+.DS_Store

@@ -155,7 +155,45 @@ export default class AIAssistantPlugin extends Plugin {
   }
 
   async saveSettings(): Promise<void> {
+    // Keep the active profile in sync with the live fields so a future
+    // profile switch and back doesn't lose recent edits.
+    this.syncActiveProfile();
     await this.persist();
+  }
+
+  /** Make `profileId` active by mirroring its fields into the top-level
+   *  settings (which is what the LLMClient reads). No-op if the id is unknown
+   *  or already active. */
+  async switchProfile(profileId: string): Promise<void> {
+    const p = this.settings.profiles.find((x) => x.id === profileId);
+    if (!p) return;
+    if (this.settings.activeProfileId === profileId) return;
+    this.settings.activeProfileId = profileId;
+    this.settings.baseUrl = p.baseUrl;
+    this.settings.apiKey = p.apiKey;
+    this.settings.model = p.model;
+    this.settings.temperature = p.temperature;
+    this.settings.topP = p.topP;
+    this.settings.extraBody = p.extraBody;
+    await this.saveSettings();
+    this.emitSessionsChange(); // ChatView listens for this to redraw the header
+  }
+
+  /** Persist the live top-level fields back into the active profile. Called
+   *  whenever the user edits baseUrl/model/etc. from the settings tab so the
+   *  profile and the live values don't drift apart. */
+  syncActiveProfile(): void {
+    const idx = this.settings.profiles.findIndex((p) => p.id === this.settings.activeProfileId);
+    if (idx < 0) return;
+    this.settings.profiles[idx] = {
+      ...this.settings.profiles[idx],
+      baseUrl: this.settings.baseUrl,
+      apiKey: this.settings.apiKey,
+      model: this.settings.model,
+      temperature: this.settings.temperature,
+      topP: this.settings.topP,
+      extraBody: this.settings.extraBody,
+    };
   }
 
   /**

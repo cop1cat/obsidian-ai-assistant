@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-05-21
+
+### Added
+- **Regenerate** button on each assistant and error message — drops the message (and any later messages, including the originating user prompt) and re-runs the agent on that prompt. Hidden mid-stream; visible on hover.
+- **Edit & resend** on user messages — inline textarea swap with Save (Cmd/Ctrl+Enter) / Cancel (Esc) buttons. Truncates the conversation past the edited turn and re-runs the agent with the new text.
+- **@-mentions** for vault notes in the composer. Typing `@` opens a fuzzy-match picker over all markdown files (↑/↓ to navigate, Enter/Tab to insert, Esc to close). The picker inserts `[[NoteName]]` (or `[[path]]` when basenames collide). On send, every wikilink in the message is parsed and surfaced to the model as a hint listing the referenced paths — the model can then call `read_file` selectively rather than receiving inlined file content.
+- **Model profiles** — saved presets for endpoint + model + sampling. Settings tab gains a "Model profiles" section (rename, switch, add, delete); a clickable chip in the composer (`Profile · model`) opens a dropdown for quick switching. The active profile's values are mirrored into the live Connection/Generation fields, so the LLM client reads from one place; edits to those fields stay in sync with the active profile.
+- **Max request attempts** + **request timeout (seconds)** settings. Defaults: `3` attempts with a `10s` per-attempt timeout for the initial response. Retries fire only before any tokens have streamed (replaying mid-stream would duplicate output); user-triggered Stop short-circuits remaining attempts.
+
+### Fixed
+- Error messages are now readable: replaced the all-red background with a neutral background, a red accent stripe on the left, and a red "Error" role label. Body text uses `--text-normal` so it's actually visible against the bubble.
+- Message text is selectable again — `.ai-chat-msg` and `.ai-chat-content` set `user-select: text`, overriding the sidebar-view default that blocked highlighting/copying.
+- Role label and message content now align across user / assistant / error bubbles. All roles share a 3px transparent left border in the base style; only `.user` and `.error` colour it, so the accent stripe no longer shifts content 3px right of assistant messages.
+- Edit / Regenerate now truncate LLM history to match the UI depth (count of surviving user turns), not the last user entry in history. Previously, editing an earlier message in a multi-turn chat could leave the LLM context out of sync with what was rendered.
+- Mention picker no longer hides substring matches once the prefix tier fills. Removed an early `break` that stopped scanning the file list as soon as `prefix.length >= limit`.
+
+### Changed
+- `package.json` license field corrected to `Apache-2.0` to match the LICENSE file (previously declared `MIT`).
+- `manifest.json` gains `authorUrl` (Obsidian community-plugins recommendation).
+
 ## [0.3.6] — 2026-05-20
 
 ### Fixed

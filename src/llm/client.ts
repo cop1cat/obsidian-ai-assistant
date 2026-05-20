@@ -75,13 +75,52 @@ export class LLMClient {
     const extra = parseExtraBody(this.settings.extraBody);
     if (extra) Object.assign(params as unknown as Record<string, unknown>, extra);
 
-    const stream = await this.client.chat.completions.create(params, { signal });
+    const maxAttempts = Math.max(1, this.settings.maxAttempts | 0);
+    const timeoutMs = Math.max(1, this.settings.requestTimeoutSec) * 1000;
+
+    // Retries only kick in while we're still waiting for the *first* token —
+    // once any delta has been forwarded to the UI, replaying would duplicate
+    // output, so we surface the error instead.
+    if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("Aborted");
+
+    let stream: Awaited<ReturnType<typeof this.client.chat.completions.create>> | null = null;
+    let attemptCtrl: AbortController | null = null;
+    let onUserAbort: (() => void) | null = null;
+    let lastErr: unknown;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const ctrl = new AbortController();
+      const userListener = () => ctrl.abort(signal.reason);
+      signal.addEventListener("abort", userListener, { once: true });
+      const timer = window.setTimeout(() => {
+        ctrl.abort(new Error(`Request timed out after ${this.settings.requestTimeoutSec}s`));
+      }, timeoutMs);
+      try {
+        stream = await this.client.chat.completions.create(params, { signal: ctrl.signal });
+        window.clearTimeout(timer);
+        // Keep the user-abort listener wired so cancelling during streaming
+        // still aborts the request. The timeout is no longer relevant once
+        // the stream is open (per-attempt timeout = time-to-first-response).
+        attemptCtrl = ctrl;
+        onUserAbort = userListener;
+        break;
+      } catch (err) {
+        window.clearTimeout(timer);
+        signal.removeEventListener("abort", userListener);
+        lastErr = err;
+        if (signal.aborted) throw err; // user cancelled — never retry
+        if (attempt === maxAttempts - 1) throw err;
+        await new Promise((r) => window.setTimeout(r, 300 * (attempt + 1)));
+      }
+    }
+    if (!stream) throw lastErr instanceof Error ? lastErr : new Error("Failed to start request");
 
     let content = "";
     let reasoningContent = "";
     const accumulated: Array<{ id: string; name: string; arguments: string }> = [];
     let finishReason: string | null = null;
 
+    try {
     for await (const chunk of stream as AsyncIterable<OpenAI.Chat.ChatCompletionChunk>) {
       const choice = chunk.choices?.[0];
       if (!choice) continue;
@@ -122,6 +161,10 @@ export class LLMClient {
       }
       if (choice.finish_reason) finishReason = choice.finish_reason;
     }
+    } finally {
+      if (onUserAbort) signal.removeEventListener("abort", onUserAbort);
+    }
+    void attemptCtrl; // referenced via `onUserAbort` closure; suppress unused warning
 
     const toolCalls: ToolCall[] = accumulated
       .filter((a) => a && a.name)

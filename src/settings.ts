@@ -62,6 +62,20 @@ export function isStaleDefaultPrompt(settings: PluginSettings): boolean {
   return settings.systemPromptBaselineHash !== CURRENT_DEFAULT_PROMPT_HASH;
 }
 
+/** A saved model preset. Switching profile copies these fields into the
+ *  top-level settings (baseUrl/apiKey/model/...) so the rest of the plugin
+ *  keeps reading from one place. The id is opaque and stable across renames. */
+export interface ModelProfile {
+  id: string;
+  label: string;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  temperature: number;
+  topP: number;
+  extraBody: string;
+}
+
 export interface PluginSettings {
   baseUrl: string;
   apiKey: string;
@@ -92,6 +106,20 @@ export interface PluginSettings {
    *  Empty string = no extras. Stored as text so users can author it
    *  directly; parsed lazily by the client (invalid JSON = ignored + warn). */
   extraBody: string;
+  /** Max attempts for a model request before surfacing an error. 1 = no retry.
+   *  Retries only fire when nothing was streamed yet — once the model starts
+   *  emitting tokens, we never replay (would duplicate output). */
+  maxAttempts: number;
+  /** Per-attempt timeout in seconds for the *initial* model response (time to
+   *  first byte). Streaming after first byte is not bounded by this. */
+  requestTimeoutSec: number;
+  /** Saved model presets. The active one's fields are mirrored into the
+   *  top-level baseUrl/apiKey/model/temperature/topP/extraBody. Always has
+   *  at least one entry (the migrated "Default" profile for legacy installs). */
+  profiles: ModelProfile[];
+  /** Id of the profile whose values are currently live. Falls back to the
+   *  first profile when stale. */
+  activeProfileId: string;
 }
 
 export const DEFAULT_SETTINGS: PluginSettings = {
@@ -115,6 +143,21 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   systemPromptBaselineHash: "",
   notifyOnPromptUpdate: true,
   extraBody: "",
+  maxAttempts: 3,
+  requestTimeoutSec: 10,
+  profiles: [
+    {
+      id: "default",
+      label: "Default",
+      baseUrl: "http://localhost:8000/v1",
+      apiKey: "EMPTY",
+      model: "",
+      temperature: 0.7,
+      topP: 1.0,
+      extraBody: "",
+    },
+  ],
+  activeProfileId: "default",
 };
 
 export function validateSettings(raw: unknown): PluginSettings {
@@ -161,7 +204,57 @@ export function validateSettings(raw: unknown): PluginSettings {
     systemPromptBaselineHash: str("systemPromptBaselineHash", defaults.systemPromptBaselineHash),
     notifyOnPromptUpdate: bool("notifyOnPromptUpdate", defaults.notifyOnPromptUpdate),
     extraBody: str("extraBody", defaults.extraBody),
+    maxAttempts: Math.max(1, Math.min(10, Math.round(num("maxAttempts", defaults.maxAttempts)))),
+    requestTimeoutSec: Math.max(1, Math.min(300, num("requestTimeoutSec", defaults.requestTimeoutSec))),
+    ...normalizeProfiles(r, defaults, {
+      baseUrl: str("baseUrl", defaults.baseUrl),
+      apiKey: str("apiKey", defaults.apiKey),
+      model: str("model", defaults.model),
+      temperature: num("temperature", defaults.temperature),
+      topP: num("topP", defaults.topP),
+      extraBody: str("extraBody", defaults.extraBody),
+    }),
   };
+}
+
+/** Read `profiles` + `activeProfileId` from raw settings, falling back to a
+ *  single profile synthesised from the legacy top-level fields when the user
+ *  is upgrading from a version that didn't have profiles. */
+function normalizeProfiles(
+  r: Record<string, unknown>,
+  defaults: PluginSettings,
+  legacyTopLevel: Pick<ModelProfile, "baseUrl" | "apiKey" | "model" | "temperature" | "topP" | "extraBody">,
+): { profiles: ModelProfile[]; activeProfileId: string } {
+  const rawList = Array.isArray(r.profiles) ? (r.profiles as unknown[]) : [];
+  const parsed: ModelProfile[] = [];
+  for (const item of rawList) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const id = typeof o.id === "string" && o.id ? o.id : `p_${Date.now()}_${parsed.length}`;
+    parsed.push({
+      id,
+      label: typeof o.label === "string" && o.label ? o.label : "Untitled",
+      baseUrl: typeof o.baseUrl === "string" ? o.baseUrl : legacyTopLevel.baseUrl,
+      apiKey: typeof o.apiKey === "string" ? o.apiKey : legacyTopLevel.apiKey,
+      model: typeof o.model === "string" ? o.model : legacyTopLevel.model,
+      temperature: typeof o.temperature === "number" && Number.isFinite(o.temperature)
+        ? o.temperature
+        : legacyTopLevel.temperature,
+      topP: typeof o.topP === "number" && Number.isFinite(o.topP) ? o.topP : legacyTopLevel.topP,
+      extraBody: typeof o.extraBody === "string" ? o.extraBody : legacyTopLevel.extraBody,
+    });
+  }
+  if (parsed.length === 0) {
+    parsed.push({
+      id: "default",
+      label: "Default",
+      ...legacyTopLevel,
+    });
+  }
+  const rawActive = typeof r.activeProfileId === "string" ? r.activeProfileId : "";
+  const activeProfileId = parsed.find((p) => p.id === rawActive)?.id ?? parsed[0].id;
+  void defaults;
+  return { profiles: parsed, activeProfileId };
 }
 
 /** Full-screen editor for the system prompt — escapes the cramped settings row. */
@@ -242,9 +335,95 @@ export class AIAssistantSettingTab extends PluginSettingTab {
     super(app, plugin);
   }
 
+  private renderProfilesSection(containerEl: HTMLElement): void {
+    containerEl.createEl("h2", { text: "Model profiles" });
+    const desc = containerEl.createEl("p", { cls: "setting-item-description" });
+    desc.setText(
+      "Saved presets for endpoint + model + sampling. Switching the active profile " +
+        "applies its values to the Connection/Generation fields below. The active " +
+        "profile is kept in sync with any edits you make there.",
+    );
+
+    const list = containerEl.createDiv({ cls: "ai-profiles-list" });
+    const redraw = () => {
+      list.empty();
+      for (const p of this.plugin.settings.profiles) {
+        const isActive = p.id === this.plugin.settings.activeProfileId;
+        const row = list.createDiv({ cls: "ai-profile-row" });
+        if (isActive) row.addClass("is-active");
+
+        const nameInput = row.createEl("input", { type: "text", cls: "ai-profile-name" });
+        nameInput.value = p.label;
+        nameInput.onchange = async () => {
+          const v = nameInput.value.trim();
+          if (!v) {
+            nameInput.value = p.label;
+            return;
+          }
+          p.label = v;
+          await this.plugin.saveSettings();
+        };
+
+        const modelSpan = row.createSpan({ cls: "ai-profile-model" });
+        modelSpan.setText(p.model || "(no model)");
+
+        const actions = row.createDiv({ cls: "ai-profile-actions" });
+        if (!isActive) {
+          const useBtn = actions.createEl("button", { text: "Use" });
+          useBtn.onclick = async () => {
+            await this.plugin.switchProfile(p.id);
+            this.display();
+          };
+        } else {
+          actions.createSpan({ cls: "ai-profile-active-badge", text: "active" });
+        }
+        const delBtn = actions.createEl("button", { text: "Delete" });
+        delBtn.disabled = this.plugin.settings.profiles.length <= 1;
+        delBtn.onclick = async () => {
+          if (this.plugin.settings.profiles.length <= 1) return;
+          const idx = this.plugin.settings.profiles.findIndex((x) => x.id === p.id);
+          if (idx < 0) return;
+          this.plugin.settings.profiles.splice(idx, 1);
+          if (isActive) {
+            // Switch to the first remaining profile.
+            await this.plugin.switchProfile(this.plugin.settings.profiles[0].id);
+          } else {
+            await this.plugin.saveSettings();
+          }
+          this.display();
+        };
+      }
+    };
+    redraw();
+
+    new Setting(containerEl)
+      .setName("New profile")
+      .setDesc("Create a copy of the current settings under a new name.")
+      .addButton((b) =>
+        b.setButtonText("Add profile").onClick(async () => {
+          const s = this.plugin.settings;
+          const newId = `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+          s.profiles.push({
+            id: newId,
+            label: `Profile ${s.profiles.length + 1}`,
+            baseUrl: s.baseUrl,
+            apiKey: s.apiKey,
+            model: s.model,
+            temperature: s.temperature,
+            topP: s.topP,
+            extraBody: s.extraBody,
+          });
+          await this.plugin.saveSettings();
+          this.display();
+        }),
+      );
+  }
+
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
+
+    this.renderProfilesSection(containerEl);
 
     containerEl.createEl("h2", { text: "AI Assistant — Connection" });
 
@@ -321,6 +500,35 @@ export class AIAssistantSettingTab extends PluginSettingTab {
           const n = parseInt(v, 10);
           if (Number.isFinite(n) && n > 0) {
             this.plugin.settings.maxContextTokens = n;
+            await this.plugin.saveSettings();
+          }
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Max request attempts")
+      .setDesc(
+        "How many times to try a model request before surfacing an error. 1 = no retry. " +
+        "Retries only happen before any tokens have streamed.",
+      )
+      .addText((t) =>
+        t.setValue(String(this.plugin.settings.maxAttempts)).onChange(async (v) => {
+          const n = parseInt(v, 10);
+          if (Number.isFinite(n) && n >= 1 && n <= 10) {
+            this.plugin.settings.maxAttempts = n;
+            await this.plugin.saveSettings();
+          }
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Request timeout (seconds)")
+      .setDesc("Per-attempt timeout for the model's first response. Streaming is not bounded after that.")
+      .addText((t) =>
+        t.setValue(String(this.plugin.settings.requestTimeoutSec)).onChange(async (v) => {
+          const n = parseInt(v, 10);
+          if (Number.isFinite(n) && n >= 1 && n <= 300) {
+            this.plugin.settings.requestTimeoutSec = n;
             await this.plugin.saveSettings();
           }
         }),

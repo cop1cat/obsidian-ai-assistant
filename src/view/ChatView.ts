@@ -78,6 +78,7 @@ export class ChatView extends ItemView {
   private contextBarEl: HTMLElement | null = null;
   private inputEl: HTMLTextAreaElement | null = null;
   private sendBtn: HTMLButtonElement | null = null;
+  private modelChipEl: HTMLElement | null = null;
   private stopBtn: HTMLButtonElement | null = null;
   private emptyHintEl: HTMLElement | null = null;
 
@@ -92,6 +93,13 @@ export class ChatView extends ItemView {
   private inputHistory: string[] = [];
   private inputHistoryIdx: number | null = null;
   private inputDraft = "";
+
+  // @-mention picker state. Range is the slice of the textarea that the
+  // selection will replace when the user picks (start..end, exclusive).
+  private mentionEl: HTMLElement | null = null;
+  private mentionItems: TFile[] = [];
+  private mentionSelectedIdx = 0;
+  private mentionRange: { start: number; end: number } | null = null;
 
   constructor(leaf: WorkspaceLeaf, private plugin: AIAssistantPlugin) {
     super(leaf);
@@ -110,7 +118,11 @@ export class ChatView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
-    this.renderer = new MessageRenderer(this.plugin, this);
+    this.renderer = new MessageRenderer(this.plugin, this, {
+      onRegenerate: (id) => void this.regenerateFrom(id),
+      onEdit: (id, text) => void this.editAndResend(id, text),
+      isGenerating: () => this.generating,
+    });
 
     const root = this.contentEl;
     root.empty();
@@ -130,6 +142,7 @@ export class ChatView extends ItemView {
         this.renderActiveSessionMessages();
         this.updateEmptyState();
       }
+      if (this.modelChipEl) this.refreshModelChip(this.modelChipEl);
     });
 
     this.render();
@@ -330,20 +343,29 @@ export class ChatView extends ItemView {
     this.contextBarEl = this.composerEl.createDiv({ cls: "ai-composer-context" });
 
     this.inputEl = this.composerEl.createEl("textarea", { cls: "ai-composer-input" });
-    this.inputEl.placeholder = "Message AI Assistant…  (Enter to send · Shift+Enter newline · ↑/↓ history)";
+    this.inputEl.placeholder = "Message AI Assistant…  (Enter to send · Shift+Enter newline · @ to mention notes)";
     this.inputEl.rows = 2;
     this.inputEl.addEventListener("keydown", (e) => this.handleInputKey(e));
     this.inputEl.addEventListener("input", () => {
       if (this.inputHistoryIdx !== null) this.inputHistoryIdx = null;
       this.autoGrowInput();
+      this.updateMentionPicker();
     });
+    // Caret movement via arrow/home/end can also enter or leave an `@token`.
+    this.inputEl.addEventListener("keyup", (e) => {
+      if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
+        this.updateMentionPicker();
+      }
+    });
+    this.inputEl.addEventListener("click", () => this.updateMentionPicker());
+    this.attachMentionPicker(this.composerEl, this.inputEl);
 
     const composerBar = this.composerEl.createDiv({ cls: "ai-composer-bar" });
     const composerLeft = composerBar.createDiv({ cls: "ai-composer-left" });
-    const modelChip = composerLeft.createSpan({ cls: "ai-composer-model" });
-    modelChip.setText(this.plugin.settings.model || "no model set");
-    modelChip.title = "Configured model (change in settings).";
-    modelChip.onclick = () => this.openPluginSettings();
+    const modelChip = composerLeft.createEl("button", { cls: "ai-composer-model" });
+    this.modelChipEl = modelChip;
+    this.refreshModelChip(modelChip);
+    modelChip.onclick = (e) => this.openProfileMenu(e, modelChip);
 
     const composerRight = composerBar.createDiv({ cls: "ai-composer-right" });
 
@@ -632,6 +654,7 @@ export class ChatView extends ItemView {
   }
 
   private handleInputKey(e: KeyboardEvent): void {
+    if (this.handleMentionKey(e)) return;
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       this.send();
@@ -763,6 +786,221 @@ export class ChatView extends ItemView {
     }
   }
 
+  private refreshModelChip(chip: HTMLElement): void {
+    const s = this.plugin.settings;
+    const active = s.profiles.find((p) => p.id === s.activeProfileId) ?? s.profiles[0];
+    const label = active?.label || "Default";
+    const model = active?.model || s.model || "no model set";
+    chip.empty();
+    chip.createSpan({ cls: "ai-composer-profile-label", text: label });
+    chip.createSpan({ cls: "ai-composer-profile-sep", text: "·" });
+    chip.createSpan({ cls: "ai-composer-profile-model", text: model });
+    chip.title =
+      s.profiles.length > 1
+        ? "Click to switch profile (manage in settings)"
+        : "Click to manage profiles in settings";
+  }
+
+  private openProfileMenu(e: MouseEvent, chip: HTMLElement): void {
+    e.preventDefault();
+    const menu = new Menu();
+    const s = this.plugin.settings;
+    for (const p of s.profiles) {
+      menu.addItem((item) => {
+        item
+          .setTitle(`${p.label}${p.model ? `  —  ${p.model}` : ""}`)
+          .setChecked(p.id === s.activeProfileId)
+          .onClick(async () => {
+            await this.plugin.switchProfile(p.id);
+            this.refreshModelChip(chip);
+          });
+      });
+    }
+    menu.addSeparator();
+    menu.addItem((item) =>
+      item.setTitle("Manage profiles…").onClick(() => this.openPluginSettings()),
+    );
+    menu.showAtMouseEvent(e);
+  }
+
+  private attachMentionPicker(host: HTMLElement, ta: HTMLTextAreaElement): void {
+    this.mentionEl = host.createDiv({ cls: "ai-mention-picker is-hidden" });
+    // Clicks inside the picker shouldn't blur the textarea.
+    this.mentionEl.addEventListener("mousedown", (e) => e.preventDefault());
+    ta.addEventListener("blur", () => {
+      // Defer so a click on a picker item still fires before we hide.
+      window.setTimeout(() => this.hideMentionPicker(), 100);
+    });
+  }
+
+  private hideMentionPicker(): void {
+    if (this.mentionEl) this.mentionEl.addClass("is-hidden");
+    this.mentionRange = null;
+    this.mentionItems = [];
+    this.mentionSelectedIdx = 0;
+  }
+
+  /** Detect whether the caret is sitting inside an `@query` token (preceded by
+   *  start-of-input or whitespace). If so, populate the picker; otherwise
+   *  hide it. Called on every input event. */
+  private updateMentionPicker(): void {
+    const ta = this.inputEl;
+    const popup = this.mentionEl;
+    if (!ta || !popup) return;
+    const caret = ta.selectionStart ?? 0;
+    const text = ta.value;
+    // Walk back from caret to find an `@` that starts a mention.
+    let i = caret - 1;
+    while (i >= 0) {
+      const ch = text[i];
+      if (ch === "@") break;
+      if (/\s/.test(ch) || ch === "[" || ch === "]") {
+        this.hideMentionPicker();
+        return;
+      }
+      i--;
+    }
+    if (i < 0) {
+      this.hideMentionPicker();
+      return;
+    }
+    // `@` must be at start of input or preceded by whitespace.
+    if (i > 0 && !/\s/.test(text[i - 1])) {
+      this.hideMentionPicker();
+      return;
+    }
+    const query = text.slice(i + 1, caret);
+    this.mentionRange = { start: i, end: caret };
+    this.mentionItems = this.searchMentionFiles(query, 8);
+    this.mentionSelectedIdx = 0;
+    this.renderMentionPicker();
+  }
+
+  private searchMentionFiles(query: string, limit: number): TFile[] {
+    const q = query.toLowerCase();
+    const files = this.app.vault.getMarkdownFiles();
+    if (!q) return files.slice(0, limit);
+    // Two-tier: basename prefix first, then any substring on basename/path.
+    // We must walk the whole list — early-breaking on prefix would silently
+    // hide all substring matches once prefix fills `limit`.
+    const prefix: TFile[] = [];
+    const sub: TFile[] = [];
+    for (const f of files) {
+      const base = f.basename.toLowerCase();
+      if (base.startsWith(q)) prefix.push(f);
+      else if (base.includes(q) || f.path.toLowerCase().includes(q)) sub.push(f);
+    }
+    return [...prefix, ...sub].slice(0, limit);
+  }
+
+  private renderMentionPicker(): void {
+    const popup = this.mentionEl;
+    if (!popup) return;
+    popup.empty();
+    if (this.mentionItems.length === 0) {
+      popup.addClass("is-hidden");
+      return;
+    }
+    popup.removeClass("is-hidden");
+    this.mentionItems.forEach((f, idx) => {
+      const row = popup.createDiv({ cls: "ai-mention-item" });
+      if (idx === this.mentionSelectedIdx) row.addClass("is-selected");
+      row.createSpan({ cls: "ai-mention-name", text: f.basename });
+      const dir = f.parent?.path && f.parent.path !== "/" ? f.parent.path : "";
+      if (dir) row.createSpan({ cls: "ai-mention-path", text: dir });
+      row.addEventListener("click", (e) => {
+        e.preventDefault();
+        this.commitMention(idx);
+      });
+    });
+  }
+
+  /** Replace the active `@query` slice with `[[basename]]` (or `[[path]]` if
+   *  the basename collides) and re-focus the textarea after the link. */
+  private commitMention(idx: number): void {
+    const ta = this.inputEl;
+    if (!ta || !this.mentionRange) return;
+    const file = this.mentionItems[idx];
+    if (!file) return;
+    // Disambiguate: use full path if multiple files share this basename.
+    const allSameBase = this.app.vault.getMarkdownFiles().filter((f) => f.basename === file.basename);
+    const target = allSameBase.length > 1 ? file.path.replace(/\.md$/, "") : file.basename;
+    const insert = `[[${target}]] `;
+    const { start, end } = this.mentionRange;
+    const before = ta.value.slice(0, start);
+    const after = ta.value.slice(end);
+    ta.value = before + insert + after;
+    const caret = (before + insert).length;
+    ta.setSelectionRange(caret, caret);
+    this.autoGrowInput();
+    this.hideMentionPicker();
+    ta.focus();
+  }
+
+  /** True if the picker handled the key — caller should not run its own
+   *  handler (history navigation, send, etc.). */
+  private handleMentionKey(e: KeyboardEvent): boolean {
+    if (!this.mentionEl || this.mentionEl.hasClass("is-hidden")) return false;
+    if (this.mentionItems.length === 0) return false;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      this.mentionSelectedIdx = (this.mentionSelectedIdx + 1) % this.mentionItems.length;
+      this.renderMentionPicker();
+      return true;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      this.mentionSelectedIdx =
+        (this.mentionSelectedIdx - 1 + this.mentionItems.length) % this.mentionItems.length;
+      this.renderMentionPicker();
+      return true;
+    }
+    if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      this.commitMention(this.mentionSelectedIdx);
+      return true;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      this.hideMentionPicker();
+      return true;
+    }
+    return false;
+  }
+
+  /** Extract `[[wikilinks]]` the user typed into this turn and surface them as
+   *  a short hint so the model knows to call `read_file` on those paths if
+   *  relevant. We deliberately do NOT inline the file content — keeps the
+   *  prompt small and lets the model decide what to read. */
+  private mentionHint(userText: string): string | null {
+    const seen = new Set<string>();
+    const re = /\[\[([^\]\n]+?)\]\]/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(userText)) !== null) {
+      const raw = m[1].split("|")[0].trim(); // strip wikilink alias
+      if (!raw) continue;
+      const resolved = this.resolveMentionPath(raw);
+      if (resolved) seen.add(resolved);
+    }
+    if (seen.size === 0) return null;
+    const paths = [...seen];
+    const list = paths.map((p) => `- ${p}`).join("\n");
+    return `# User-referenced notes\nThe user mentioned the following vault notes via wikilinks. Use \`read_file\` to inspect them if relevant to the request — do not assume their contents.\n${list}`;
+  }
+
+  /** Resolve a wikilink target (basename or relative path) to a real vault
+   *  path. Falls back to the raw string so the model still sees something
+   *  actionable even when resolution fails. */
+  private resolveMentionPath(target: string): string {
+    const f = this.app.metadataCache.getFirstLinkpathDest(target, "");
+    if (f) return f.path;
+    // Try common extensions if user typed bare name.
+    const withMd = target.endsWith(".md") ? target : `${target}.md`;
+    const f2 = this.app.vault.getAbstractFileByPath(withMd);
+    if (f2 instanceof TFile) return f2.path;
+    return target;
+  }
+
   private async memoryHint(): Promise<string | null> {
     if (!this.plugin.settings.includeMemoryInContext) return null;
     const trimmed = (this.plugin.settings.memoryText ?? "").trim();
@@ -855,6 +1093,88 @@ export class ChatView extends ItemView {
     this.updateEmptyState();
     this.persist();
 
+    await this.runAgentTurn(text);
+  }
+
+  /** Drop everything from `messageId` onward (and the user prompt that led to
+   *  it) and re-run the agent on that prompt. Used by the "Regenerate" button
+   *  on assistant/error messages. */
+  async regenerateFrom(messageId: string): Promise<void> {
+    if (this.generating) return;
+    const msgs = this.uiMessages;
+    const idx = msgs.findIndex((m) => m.id === messageId);
+    if (idx < 0) return;
+    let userIdx = -1;
+    for (let i = idx; i >= 0; i--) {
+      if (msgs[i].role === "user") {
+        userIdx = i;
+        break;
+      }
+    }
+    if (userIdx < 0) return;
+    const userText = msgs[userIdx].content;
+    if (!userText) return;
+    await this.replayFromUserIndex(userIdx, userText);
+  }
+
+  /** Replace a user message with new text and re-run from there. */
+  async editAndResend(messageId: string, newText: string): Promise<void> {
+    if (this.generating) return;
+    const trimmed = newText.trim();
+    if (!trimmed) return;
+    const msgs = this.uiMessages;
+    const idx = msgs.findIndex((m) => m.id === messageId);
+    if (idx < 0 || msgs[idx].role !== "user") return;
+    await this.replayFromUserIndex(idx, trimmed);
+  }
+
+  /** Core: drop UI messages from `userIdx` on, drop the matching tail of LLM
+   *  history (so `runAgentTurn` re-pushes), then run the agent on `text`. */
+  private async replayFromUserIndex(userIdx: number, text: string): Promise<void> {
+    const msgs = this.uiMessages;
+    const removed = msgs.splice(userIdx);
+    for (const m of removed) {
+      const el = this.messageElements.get(m.id);
+      if (el) el.remove();
+      this.messageElements.delete(m.id);
+    }
+
+    // Truncate LLM history to match the new UI depth. Editing the Nth user
+    // message (counting from 1) should leave (N-1) user turns in history, plus
+    // their assistant/tool aftermath; `runAgentTurn` re-pushes the edited turn.
+    // Don't anchor on the *last* user entry — that breaks when the user edits
+    // an earlier message in a multi-turn chat.
+    const survivingUserCount = msgs.reduce((n, m) => (m.role === "user" ? n + 1 : n), 0);
+    const hist = this.history;
+    let cutAt = hist.length;
+    let seen = 0;
+    for (let i = 0; i < hist.length; i++) {
+      if (hist[i].role === "user") {
+        if (seen === survivingUserCount) {
+          cutAt = i;
+          break;
+        }
+        seen++;
+      }
+    }
+    if (cutAt < hist.length) {
+      this.history = hist.slice(0, cutAt);
+    }
+
+    const userUi: UiMessage = {
+      id: `u_${Date.now()}`,
+      role: "user",
+      content: text,
+    };
+    this.uiMessages.push(userUi);
+    this.renderMessage(userUi);
+    this.updateEmptyState();
+    this.persist();
+
+    await this.runAgentTurn(text);
+  }
+
+  private async runAgentTurn(text: string): Promise<void> {
     this.abortController = new AbortController();
     this.setGenerating(true);
 
@@ -871,7 +1191,8 @@ export class ChatView extends ItemView {
 
     const [activeHint, memHint] = await Promise.all([this.activeNoteHint(), this.memoryHint()]);
     const temporal = this.temporalContextHint();
-    const hint = [temporal, memHint, activeHint].filter((x): x is string => !!x).join("\n\n");
+    const mentionHint = this.mentionHint(text);
+    const hint = [temporal, memHint, activeHint, mentionHint].filter((x): x is string => !!x).join("\n\n");
 
     await agent.runTurn(
       text,

@@ -2,6 +2,12 @@ import { Component, MarkdownRenderer } from "obsidian";
 import type AIAssistantPlugin from "../main";
 import type { UiMessage, UiToolCall } from "../llm/types";
 
+export interface MessageRendererHost {
+  onRegenerate(messageId: string): void;
+  onEdit(messageId: string, newText: string): void;
+  isGenerating(): boolean;
+}
+
 interface PrismLike {
   languages: Record<string, unknown>;
   highlightElement(el: HTMLElement): void;
@@ -36,6 +42,7 @@ export class MessageRenderer {
   constructor(
     private plugin: AIAssistantPlugin,
     private host: Component,
+    private hostApi?: MessageRendererHost,
   ) {}
 
   render(container: HTMLElement, msg: UiMessage): void {
@@ -65,6 +72,37 @@ export class MessageRenderer {
       };
     }
 
+    // Regenerate — only meaningful for assistant/error replies once the turn
+    // has settled (no point offering it mid-stream or on user bubbles).
+    if (
+      !msg.streaming &&
+      (msg.role === "assistant" || msg.role === "error") &&
+      this.hostApi
+    ) {
+      const api = this.hostApi;
+      const regen = header.createEl("button", { cls: "ai-chat-regen-btn", text: "Regenerate" });
+      regen.setAttr("aria-label", "Regenerate response");
+      regen.title = "Regenerate response";
+      regen.onclick = (e) => {
+        e.stopPropagation();
+        if (api.isGenerating()) return;
+        api.onRegenerate(msg.id);
+      };
+    }
+
+    // Edit — only for user messages.
+    if (msg.role === "user" && this.hostApi) {
+      const api = this.hostApi;
+      const edit = header.createEl("button", { cls: "ai-chat-regen-btn", text: "Edit" });
+      edit.setAttr("aria-label", "Edit message");
+      edit.title = "Edit & resend";
+      edit.onclick = (e) => {
+        e.stopPropagation();
+        if (api.isGenerating()) return;
+        this.openEditor(container, msg, api);
+      };
+    }
+
     if (msg.toolCalls && msg.toolCalls.length) {
       const toolsWrap = container.createDiv();
       for (const tc of msg.toolCalls) {
@@ -87,6 +125,51 @@ export class MessageRenderer {
       this.renderMarkdown(contentEl, msg.content || "");
       if (msg.streaming) contentEl.addClass("ai-chat-streaming-cursor");
     }
+  }
+
+  private openEditor(container: HTMLElement, msg: UiMessage, api: MessageRendererHost): void {
+    // Swap the rendered bubble for an inline textarea; on Save we hand the new
+    // text back to the host (which truncates history and re-runs the agent).
+    // On Cancel we re-render the original bubble.
+    container.empty();
+    container.addClass("ai-chat-msg", msg.role, "is-editing");
+    const wrap = container.createDiv({ cls: "ai-chat-edit-wrap" });
+    const ta = wrap.createEl("textarea", { cls: "ai-chat-edit-textarea" });
+    ta.value = msg.content;
+    ta.rows = Math.min(20, Math.max(3, msg.content.split("\n").length + 1));
+    const btnRow = wrap.createDiv({ cls: "ai-chat-edit-buttons" });
+    const cancel = btnRow.createEl("button", { cls: "ai-chat-edit-btn", text: "Cancel" });
+    const save = btnRow.createEl("button", { cls: "ai-chat-edit-btn mod-cta", text: "Save & resend" });
+
+    const restore = () => {
+      container.removeClass("is-editing");
+      this.render(container, msg);
+    };
+    cancel.onclick = (e) => {
+      e.stopPropagation();
+      restore();
+    };
+    save.onclick = (e) => {
+      e.stopPropagation();
+      const next = ta.value.trim();
+      if (!next) return;
+      if (next === msg.content) {
+        restore();
+        return;
+      }
+      api.onEdit(msg.id, next);
+    };
+    ta.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        restore();
+      } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        save.click();
+      }
+    });
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
   }
 
   private renderToolCall(parent: HTMLElement, tc: UiToolCall): void {
